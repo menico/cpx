@@ -247,11 +247,58 @@ pub fn execute(
                 state.forget(path);
             }
 
-            Action::WriteEnvrcBlock { .. }
-            | Action::RemoveEnvrcBlock { .. }
-            | Action::GitInfoExclude { .. }
-            | Action::RunDirenvAllow { .. } => {
-                unimplemented!("directory binding actions land with the binding module")
+            Action::WriteEnvrcBlock { envrc, content } => {
+                ensure_parent(envrc)?;
+                fs::write(envrc, content).map_err(io("write", envrc))?;
+                // Deliberately not recorded in state: an .envrc belongs to
+                // the user's project. Ownership of the block alone is tracked
+                // in the binding registry.
+            }
+
+            Action::RemoveEnvrcBlock { envrc } => {
+                let existing = fs::read_to_string(envrc).unwrap_or_default();
+                if let Ok(Some(without)) = crate::binding::remove_block(&existing) {
+                    if without.trim().is_empty() {
+                        // The file existed only to hold our block.
+                        fs::remove_file(envrc).map_err(io("remove", envrc))?;
+                    } else {
+                        fs::write(envrc, without).map_err(io("write", envrc))?;
+                    }
+                }
+            }
+
+            Action::GitInfoExclude { repo, line } => {
+                let existing = fs::read_to_string(repo).unwrap_or_default();
+                if existing.lines().any(|l| l.trim() == line) {
+                    continue;
+                }
+                ensure_parent(repo)?;
+                let mut text = existing;
+                if !text.is_empty() && !text.ends_with('\n') {
+                    text.push('\n');
+                }
+                text.push_str(line);
+                text.push('\n');
+                fs::write(repo, text).map_err(io("write", repo))?;
+            }
+
+            Action::RunDirenvAllow { dir } => {
+                // direnv is a convenience, not a dependency: without it the
+                // block is still written and the user is simply told.
+                match std::process::Command::new("direnv")
+                    .arg("allow")
+                    .arg(dir)
+                    .output()
+                {
+                    Ok(out) if out.status.success() => {}
+                    Ok(out) => report.performed.push(format!(
+                        "direnv allow failed: {}",
+                        String::from_utf8_lossy(&out.stderr).trim()
+                    )),
+                    Err(_) => report
+                        .performed
+                        .push("direnv is not installed; run `direnv allow` yourself".to_string()),
+                }
             }
         }
 

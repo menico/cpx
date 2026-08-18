@@ -1,3 +1,4 @@
+pub mod binding;
 pub mod execute;
 pub mod materialize;
 pub mod plan;
