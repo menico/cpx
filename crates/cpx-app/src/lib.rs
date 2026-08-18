@@ -12,6 +12,16 @@ use tauri::{App, AppHandle, Manager, WindowEvent};
 /// takes focus too — hiding then would dismiss the window mid-task.
 static PICKER_OPEN: AtomicBool = AtomicBool::new(false);
 
+/// Set while the window is being shown deliberately. An accessory app cannot
+/// reliably take focus from a menu, so the window receives `Focused(false)`
+/// moments after being shown — without this it would hide again instantly,
+/// which looks exactly like the menu item doing nothing.
+static SHOWING: AtomicBool = AtomicBool::new(false);
+
+/// Set when the user has actually asked to quit, so the exit guard can tell a
+/// real quit from a closed window.
+static QUITTING: AtomicBool = AtomicBool::new(false);
+
 /// Open a folder picker and return the chosen path.
 ///
 /// This lives in Rust rather than the frontend so the app stays frontmost
@@ -118,7 +128,8 @@ pub fn run() {
         .setup(setup)
         .on_window_event(|window, event| {
             if let WindowEvent::Focused(false) = event {
-                if !PICKER_OPEN.load(Ordering::SeqCst) && std::env::var("CPX_DEV_SHOW").is_err() {
+                let busy = PICKER_OPEN.load(Ordering::SeqCst) || SHOWING.load(Ordering::SeqCst);
+                if !busy && std::env::var("CPX_DEV_SHOW").is_err() {
                     let _ = window.hide();
                 }
             }
@@ -127,9 +138,12 @@ pub fn run() {
         .expect("the app should build")
         .run(|_app, event| {
             // Closing the window leaves the app in the menu bar rather than
-            // quitting: that is what the tray icon is for.
+            // quitting: that is what the tray icon is for. A deliberate quit
+            // must still get through, or "Quit cpx" cancels itself.
             if let tauri::RunEvent::ExitRequested { api, .. } = event {
-                api.prevent_exit();
+                if !QUITTING.load(Ordering::SeqCst) {
+                    api.prevent_exit();
+                }
             }
         });
 }
@@ -171,7 +185,11 @@ fn setup(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
         .icon_as_template(true)
         .menu(&menu)
         .show_menu_on_left_click(false)
-        .on_menu_event(|app, event| match event.id.as_ref() {
+        .on_menu_event(|app, event| {
+            if std::env::var("CPX_DEBUG").is_ok() {
+                eprintln!("[cpx] tray menu event: {}", event.id.as_ref());
+            }
+            match event.id.as_ref() {
             "open" => show_window(app),
             "config" => {
                 if let Ok(path) = commands::config_path() {
@@ -179,8 +197,12 @@ fn setup(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
                     let _ = app.opener().open_path(path, None::<&str>);
                 }
             }
-            "quit" => app.exit(0),
+            "quit" => {
+                QUITTING.store(true, Ordering::SeqCst);
+                app.exit(0);
+            }
             _ => {}
+            }
         })
         .on_tray_icon_event(|tray, event| {
             if let TrayIconEvent::Click {
@@ -198,9 +220,14 @@ fn setup(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
                     let _ = window.hide();
                     return;
                 }
+                SHOWING.store(true, Ordering::SeqCst);
                 let _ = window.show();
                 position_under_tray(&window, rect);
                 let _ = window.set_focus();
+                std::thread::spawn(|| {
+                    std::thread::sleep(std::time::Duration::from_millis(700));
+                    SHOWING.store(false, Ordering::SeqCst);
+                });
             }
         })
         .build(app)?;
@@ -209,10 +236,19 @@ fn setup(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn show_window(app: &AppHandle) {
-    if let Some(window) = app.get_webview_window("main") {
-        let _ = window.show();
-        let _ = window.set_focus();
-    }
+    let Some(window) = app.get_webview_window("main") else {
+        return;
+    };
+
+    // Hold off hide-on-blur while the window comes up, then let it resume.
+    SHOWING.store(true, Ordering::SeqCst);
+    let _ = window.show();
+    let _ = window.set_focus();
+
+    std::thread::spawn(|| {
+        std::thread::sleep(std::time::Duration::from_millis(700));
+        SHOWING.store(false, Ordering::SeqCst);
+    });
 }
 
 /// Centre the window horizontally under the tray icon, just below the menu bar.
