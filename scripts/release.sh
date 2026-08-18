@@ -134,8 +134,11 @@ cask "cpx" do
                    sudo: false
   end
 
+  # Deliberately does not list ~/.claude-profiles. Profiles hold real state
+  # — session history for anything in `own` mode, and adopted directories are
+  # the user's own working directories. Uninstalling the app must not take
+  # them; `cpx` can remove a profile deliberately.
   zap trash: [
-    "~/.claude-profiles",
     "~/Library/Application Support/io.github.menico.cpx",
   ]
 end

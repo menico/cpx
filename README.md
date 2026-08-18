@@ -4,22 +4,42 @@ Run several Claude Code accounts on one machine. Each profile gets its own
 config directory, its own login, its own command, and can be bound to a
 directory so the right account is used automatically.
 
-**Status: Phase 1 (core + CLI) and Phase 2 (menu-bar app).** The statusline
-builder, per-profile MCP servers, and cloud sync are later phases — see
-`docs/superpowers/specs/`.
+Per-profile statuslines and per-profile MCP servers need nothing extra: both
+live in the config directory, so each profile already has its own. Settings
+sync across machines is deliberately not included.
 
 ## Install
+
+```bash
+brew tap menico/tap
+brew install cpx           # the command
+brew install --cask cpx    # the menu-bar app
+```
+
+Homebrew asks you to trust a third-party cask the first time:
+`brew trust menico/tap`.
+
+Updating:
+
+```bash
+brew update && brew upgrade cpx
+```
+
+The app lives in the menu bar, not the Dock. To start it at login, add it
+under System Settings → General → Login Items.
+
+The app is ad-hoc signed rather than notarised. The cask clears the quarantine
+flag for you, so it opens without a right-click.
+
+### From source
 
 ```bash
 make install
 ```
 
-Builds and installs the `cpx` command into `~/.local/bin` and `cpx.app` into
-`/Applications`. The app is ad-hoc signed, which is enough for the machine
-that built it; a build for anyone else needs a Developer ID and notarisation.
-
-The app lives in the menu bar, not the Dock. To start it at login, add it
-under System Settings → General → Login Items.
+Installs the command into `~/.local/bin` and the app into `/Applications`.
+If you have also installed through Homebrew, remove one of them — whichever
+comes first on `PATH` wins, which is rarely the one you meant.
 
 ## Quick start
 
@@ -179,6 +199,7 @@ claude-work auth login
 | `cpx run <profile> -- <args>` | one-shot under a profile |
 | `cpx clone <from> <to>` | duplicate a profile's config, without credentials |
 | `cpx adopt [dir]` | manage a config directory you already have, in place |
+| `cpx --version` | the installed version |
 | `cpx profile add\|rm <name>` | edit the config, preserving comments |
 
 Every read command takes `--json`.
@@ -223,7 +244,15 @@ no decision the CLI does not.
 ## Development
 
 ```bash
-make test    # 292 Rust tests, clippy with warnings denied, and a UI typecheck
+make test    # 311 Rust tests, clippy with warnings denied, and a UI typecheck
+make dev     # the app against a live UI
+```
+
+Releases are cut locally rather than in CI, so they can be rehearsed:
+
+```bash
+make release-dry VERSION=0.2.0   # build everything, publish nothing
+make release VERSION=0.2.0       # publish, and point the tap at it
 ```
 
 Opening `ui` in a plain browser (`pnpm --dir ui dev`) runs the interface
