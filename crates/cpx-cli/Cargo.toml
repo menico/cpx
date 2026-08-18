@@ -1,0 +1,16 @@
+[package]
+name = "cpx-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "cpx"
+path = "src/main.rs"
+
+[dependencies]
+cpx-core = { path = "../cpx-core" }
+anyhow.workspace = true
+serde_json.workspace = true
+clap = { version = "4", features = ["derive"] }
