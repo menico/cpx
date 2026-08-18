@@ -3,3 +3,7 @@ target/
 node_modules/
 ui/dist/
 .playwright-mcp/
+
+*.png
+!crates/cpx-app/icons/*.png
+!ui/public/*.png
