@@ -1,3 +1,5 @@
+pub mod doctor;
+pub mod credentials;
 pub mod binding;
 pub mod execute;
 pub mod materialize;
