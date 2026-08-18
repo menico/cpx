@@ -8,7 +8,7 @@ use cpx_core::layout::Layout;
 use cpx_core::materialize::{plan_apply, ApplyOptions};
 use cpx_core::state::{State, MARKER};
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use tempfile::TempDir;
 
 struct Env {

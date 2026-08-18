@@ -142,6 +142,7 @@ dependencies = [
  "clap",
  "cpx-core",
  "serde_json",
+ "tempfile",
 ]
 
 [[package]]
@@ -155,6 +156,7 @@ dependencies = [
  "tempfile",
  "thiserror",
  "toml",
+ "toml_edit",
 ]
 
 [[package]]

@@ -1,3 +1,5 @@
+pub mod config_edit;
+pub mod discovery;
 pub mod doctor;
 pub mod credentials;
 pub mod binding;

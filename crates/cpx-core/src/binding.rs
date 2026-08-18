@@ -16,6 +16,12 @@ use std::path::{Path, PathBuf};
 pub const BLOCK_BEGIN_PREFIX: &str = "# >>> cpx:";
 pub const BLOCK_END: &str = "# <<< cpx <<<";
 
+/// A managed block that is opened but never closed. Refusing is the only
+/// safe option: appending to it would leave two opens and one close.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error("the cpx block is opened but never closed")]
+pub struct UnterminatedBlock;
+
 #[derive(Debug, thiserror::Error)]
 pub enum BindError {
     #[error("{path} has a cpx block that is opened but never closed; fix it by hand and retry")]
@@ -111,7 +117,7 @@ pub fn render_block(
 }
 
 /// Locate the managed block's line range within `existing`.
-fn locate(existing: &str) -> Result<Option<(usize, usize)>, ()> {
+fn locate(existing: &str) -> Result<Option<(usize, usize)>, UnterminatedBlock> {
     let lines: Vec<&str> = existing.lines().collect();
     let begin = lines
         .iter()
@@ -125,11 +131,11 @@ fn locate(existing: &str) -> Result<Option<(usize, usize)>, ()> {
         .map(|offset| begin + offset);
     // Refuse rather than guess: appending a second block to a half-open one
     // would leave a file no future run could parse.
-    end.map(|end| Some((begin, end))).ok_or(())
+    end.map(|end| Some((begin, end))).ok_or(UnterminatedBlock)
 }
 
 /// The block currently present in `existing`, if any.
-pub fn extract_block(existing: &str) -> Result<Option<String>, ()> {
+pub fn extract_block(existing: &str) -> Result<Option<String>, UnterminatedBlock> {
     let Some((begin, end)) = locate(existing)? else {
         return Ok(None);
     };
@@ -138,7 +144,7 @@ pub fn extract_block(existing: &str) -> Result<Option<String>, ()> {
 }
 
 /// Insert or replace the managed block, preserving everything else.
-pub fn upsert_block(existing: &str, block: &str) -> Result<String, ()> {
+pub fn upsert_block(existing: &str, block: &str) -> Result<String, UnterminatedBlock> {
     let lines: Vec<&str> = existing.lines().collect();
     let block_lines: Vec<&str> = block.lines().collect();
 
@@ -165,7 +171,7 @@ pub fn upsert_block(existing: &str, block: &str) -> Result<String, ()> {
 }
 
 /// Remove the managed block. `None` when there was none to remove.
-pub fn remove_block(existing: &str) -> Result<Option<String>, ()> {
+pub fn remove_block(existing: &str) -> Result<Option<String>, UnterminatedBlock> {
     let Some((begin, end)) = locate(existing)? else {
         return Ok(None);
     };

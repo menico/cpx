@@ -9,6 +9,9 @@ rust-version.workspace = true
 name = "cpx"
 path = "src/main.rs"
 
+[dev-dependencies]
+tempfile.workspace = true
+
 [dependencies]
 cpx-core = { path = "../cpx-core" }
 anyhow.workspace = true

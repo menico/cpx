@@ -76,17 +76,24 @@ fn read_source_json(path: &Path, plan: &mut Plan) -> Value {
     }
 }
 
+/// One resource of one profile, resolved to concrete paths.
+struct ResourceTask<'a> {
+    name: &'a str,
+    key: ResourceKey,
+    spec: &'a ResourceSpec,
+    src: PathBuf,
+    dst: PathBuf,
+}
+
 /// Plan one resource for one profile.
 fn plan_resource(
     plan: &mut Plan,
     state: &State,
     options: &ApplyOptions,
-    name: &str,
-    key: ResourceKey,
-    spec: &ResourceSpec,
-    src: &Path,
-    dst: &Path,
+    task: &ResourceTask,
 ) -> Result<(), PlanError> {
+    let ResourceTask { name, key, spec, src, dst } = task;
+    let (key, src, dst) = (*key, src.as_path(), dst.as_path());
     let label = key.config_name();
 
     match spec.mode {
@@ -325,7 +332,18 @@ pub fn plan_apply(
         for (key, spec) in &profile.resources {
             let src = config.source_dir.join(key.target_name());
             let dst = dir.join(key.target_name());
-            plan_resource(&mut plan, state, options, name, *key, spec, &src, &dst)?;
+            plan_resource(
+                &mut plan,
+                state,
+                options,
+                &ResourceTask {
+                    name,
+                    key: *key,
+                    spec,
+                    src,
+                    dst,
+                },
+            )?;
         }
 
         plan_scripts(&mut plan, state, config, layout, options, name, profile)?;

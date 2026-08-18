@@ -297,12 +297,7 @@ fn overlay(
             });
         }
 
-        let patch = match patch {
-            Some(value) => Some(
-                serde_json::to_value(value).expect("TOML values are representable as JSON"),
-            ),
-            None => None,
-        };
+        let patch = patch.map(|value| serde_json::to_value(value).expect("TOML values are representable as JSON"));
 
         into.insert(key, ResourceSpec { mode, patch });
     }

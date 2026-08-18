@@ -281,7 +281,7 @@ pub fn diagnose(
 
     // Worst first, so the thing that is actually broken is the thing the
     // user reads. `sort_by` is stable, so related checks stay together.
-    checks.sort_by(|a, b| b.severity.cmp(&a.severity));
+    checks.sort_by_key(|c| std::cmp::Reverse(c.severity));
     checks
 }
 
