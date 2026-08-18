@@ -4,9 +4,7 @@
   "version": "0.1.0",
   "identifier": "io.honestdig.cpx",
   "build": {
-    "beforeDevCommand": "pnpm --dir ../../ui dev",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "pnpm --dir ../../ui build",
     "frontendDist": "../../ui/dist"
   },
   "app": {

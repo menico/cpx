@@ -8,12 +8,22 @@ directory so the right account is used automatically.
 builder, per-profile MCP servers, and cloud sync are later phases — see
 `docs/superpowers/specs/`.
 
+## Install
+
+```bash
+make install
+```
+
+Builds and installs the `cpx` command into `~/.local/bin` and `cpx.app` into
+`/Applications`. The app is ad-hoc signed, which is enough for the machine
+that built it; a build for anyone else needs a Developer ID and notarisation.
+
+The app lives in the menu bar, not the Dock. To start it at login, add it
+under System Settings → General → Login Items.
+
 ## Quick start
 
 ```bash
-cargo build --release
-install -m 755 target/release/cpx ~/.local/bin/cpx
-
 cpx init --profile work --profile personal
 cpx apply
 
@@ -190,8 +200,8 @@ overrides whichever profile you think you are using.
 ## The menu-bar app
 
 ```bash
-pnpm --dir ui install
-pnpm --dir ui tauri dev      # or `tauri build` for a bundled .app
+make dev     # runs the app against a live UI
+make app     # builds cpx.app and a .dmg
 ```
 
 It lives in the menu bar: click the icon for a popover listing every profile,
@@ -210,9 +220,7 @@ no decision the CLI does not.
 ## Development
 
 ```bash
-cargo test                   # 252 tests
-cargo clippy --all-targets
-pnpm --dir ui tsc --noEmit
+make test    # 292 Rust tests, clippy with warnings denied, and a UI typecheck
 ```
 
 Opening `ui` in a plain browser (`pnpm --dir ui dev`) runs the interface
