@@ -13,7 +13,7 @@ sync across machines is deliberately not included.
 ```bash
 brew tap menico/tap
 brew install cpx           # the command
-brew install --cask cpx    # the menu-bar app
+brew install --cask cpx-app  # the menu-bar app
 ```
 
 Homebrew asks you to trust a third-party cask the first time:
@@ -22,7 +22,9 @@ Homebrew asks you to trust a third-party cask the first time:
 Updating:
 
 ```bash
-brew update && brew upgrade cpx
+brew update
+brew upgrade cpx           # the command
+brew upgrade --cask cpx-app
 ```
 
 The app lives in the menu bar, not the Dock. To start it at login, add it
