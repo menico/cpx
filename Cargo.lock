@@ -647,7 +647,7 @@ dependencies = [
 
 [[package]]
 name = "cpx-app"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "cpx-core",
  "serde",
@@ -661,7 +661,7 @@ dependencies = [
 
 [[package]]
 name = "cpx-cli"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -672,7 +672,7 @@ dependencies = [
 
 [[package]]
 name = "cpx-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "hex",
  "serde",
