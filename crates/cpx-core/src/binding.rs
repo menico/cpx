@@ -276,7 +276,7 @@ pub fn plan_bind(
 
     let block = render_block(
         profile_name,
-        &layout.profile_dir(profile_name),
+        &config.config_dir(layout, profile_name),
         &layout.profile_bin_dir(profile_name),
         &profile.env,
     );

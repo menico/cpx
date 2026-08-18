@@ -15,6 +15,9 @@ use serde::Serialize;
 #[serde(rename_all = "camelCase")]
 pub struct ProfileRow {
     pub name: String,
+    /// True when the config directory is one the user already had, managed in
+    /// place rather than created under the cpx root.
+    pub adopted: bool,
     pub description: String,
     pub color: Option<String>,
     pub command: String,
@@ -91,6 +94,17 @@ pub struct CheckView {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct AdoptionRow {
+    pub name: String,
+    pub dir: String,
+    /// What the directory already holds, and will keep untouched.
+    pub keeps: Vec<String>,
+    /// True when a profile of that name is already configured.
+    pub taken: bool,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ApplyView {
     pub performed: usize,
     pub backups: Vec<(String, String)>,
@@ -131,11 +145,12 @@ pub fn action_verb(action: &cpx_core::plan::Action) -> &'static str {
 
 pub fn profile_row(config: &Config, layout: &Layout, name: &str) -> ProfileRow {
     let profile = &config.profiles[name];
-    let dir = layout.profile_dir(name);
+    let dir = config.config_dir(layout, name);
     let status = credentials::status(&dir);
 
     ProfileRow {
         name: name.to_string(),
+        adopted: profile.dir.is_some(),
         description: profile.description.clone(),
         color: profile.color.clone(),
         command: format!("{}{name}", config.wrapper_prefix),
@@ -155,7 +170,7 @@ pub fn profile_row(config: &Config, layout: &Layout, name: &str) -> ProfileRow {
 
 pub fn profile_detail(config: &Config, layout: &Layout, name: &str) -> ProfileDetail {
     let profile = &config.profiles[name];
-    let dir = layout.profile_dir(name);
+    let dir = config.config_dir(layout, name);
 
     ProfileDetail {
         row: profile_row(config, layout, name),
@@ -225,6 +240,18 @@ pub fn binding_rows(bindings: &Bindings, config: &Config) -> Vec<BindingRow> {
                 .to_string(),
                 healthy: health == binding::BindingHealth::Healthy,
             }
+        })
+        .collect()
+}
+
+pub fn adoption_rows(found: &[cpx_core::adopt::Adoption], config: &Config) -> Vec<AdoptionRow> {
+    found
+        .iter()
+        .map(|adoption| AdoptionRow {
+            name: adoption.name.clone(),
+            dir: adoption.dir.display().to_string(),
+            keeps: adoption.found.clone(),
+            taken: config.profiles.contains_key(&adoption.name),
         })
         .collect()
 }

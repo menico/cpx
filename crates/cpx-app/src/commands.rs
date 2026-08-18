@@ -190,6 +190,31 @@ pub fn set_resource(profile: String, resource: String, mode: String) -> Answer<(
     edit(|text| config_edit::set_resource_mode(text, &profile, &resource, &mode))
 }
 
+/// Directories that could be managed in place, with what each would keep.
+#[tauri::command]
+pub fn adoption_candidates() -> Answer<Vec<AdoptionRow>> {
+    let install = install()?;
+    let found = cpx_core::adopt::candidates(
+        &install.layout.home,
+        &install.config.source_dir,
+        &install.layout.root,
+    );
+    Ok(adoption_rows(&found, &install.config))
+}
+
+/// Adopt a directory: register it where it is, changing nothing inside it.
+#[tauri::command]
+pub fn adopt(dir: String, name: Option<String>) -> Answer<()> {
+    let install = install()?;
+    let adoption = cpx_core::adopt::inspect(
+        std::path::Path::new(&dir),
+        &install.config.source_dir,
+        name.as_deref(),
+    )
+    .map_err(err)?;
+    edit(|text| config_edit::add_adopted_profile(text, &adoption))
+}
+
 #[tauri::command]
 pub fn config_path() -> Answer<String> {
     Ok(layout_from_env()

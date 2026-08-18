@@ -198,3 +198,32 @@ pub fn set_profile_field(
     }
     validated(doc)
 }
+
+/// Write an adopted directory into the config as a new profile.
+///
+/// The resource modes come from what the directory already contains, so the
+/// profile is inert on the next apply beyond its wrapper and shim.
+pub fn add_adopted_profile(
+    text: &str,
+    adoption: &crate::adopt::Adoption,
+) -> Result<String, EditError> {
+    check_name(&adoption.name)?;
+    let mut doc: DocumentMut = text.parse()?;
+    let profiles = profiles_table(&mut doc);
+    if profiles.contains_key(&adoption.name) {
+        return Err(EditError::ProfileExists(adoption.name.clone()));
+    }
+
+    let mut table = Table::new();
+    table["dir"] = toml_edit::value(adoption.dir.to_string_lossy().as_ref());
+
+    let mut resources = Table::new();
+    resources.set_implicit(false);
+    for (key, mode) in &adoption.resources {
+        resources[key.config_name()] = toml_edit::value(mode.as_str());
+    }
+    table["resources"] = Item::Table(resources);
+
+    profiles.insert(&adoption.name, Item::Table(table));
+    validated(doc)
+}

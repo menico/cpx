@@ -87,6 +87,14 @@ enum Command {
     },
     /// Copy a profile's configuration under a new name, without credentials.
     Clone { from: String, to: String },
+    /// Manage an existing Claude config directory in place, without moving it.
+    Adopt {
+        /// The directory to adopt. Omit to list what could be adopted.
+        dir: Option<PathBuf>,
+        /// Profile name. Defaults to the directory's own name.
+        #[arg(long)]
+        name: Option<String>,
+    },
     /// Add or remove profiles in the config.
     #[command(subcommand)]
     Profile(ProfileCommand),
@@ -130,6 +138,7 @@ fn run() -> Result<()> {
         Command::Which => cmd_which(cli.json),
         Command::Run { profile, args } => cmd_run(&profile, &args),
         Command::Clone { from, to } => cmd_clone(&from, &to),
+        Command::Adopt { dir, name } => cmd_adopt(dir, name.as_deref(), cli.json),
         Command::Profile(ProfileCommand::Add { name, description }) => {
             edit_config(|text| Ok(config_edit::add_profile(text, &name, &description)?))?;
             println!("Added profile `{name}`. Run `cpx apply` to create it.");
@@ -288,7 +297,7 @@ fn cmd_list(as_json: bool) -> Result<()> {
     let mut rows = Vec::new();
 
     for (name, profile) in &session.config.profiles {
-        let dir = session.layout.profile_dir(name);
+        let dir = session.config.config_dir(&session.layout, name);
         let status = credentials::status(&dir);
         rows.push(json!({
             "name": name,
@@ -338,7 +347,7 @@ fn cmd_show(name: &str, as_json: bool) -> Result<()> {
         .profiles
         .get(name)
         .with_context(|| format!("no profile named `{name}`"))?;
-    let dir = session.layout.profile_dir(name);
+    let dir = session.config.config_dir(&session.layout, name);
     let status = credentials::status(&dir);
 
     let resources: Vec<_> = profile
@@ -565,6 +574,64 @@ fn cmd_run(profile: &str, args: &[String]) -> Result<()> {
     }
     // exec, so signals and the exit status belong to Claude, not to cpx.
     Err(std::process::Command::new(&wrapper).args(args).exec().into())
+}
+
+fn cmd_adopt(dir: Option<PathBuf>, name: Option<&str>, as_json: bool) -> Result<()> {
+    use cpx_core::adopt;
+
+    let session = Session::load()?;
+    let source = &session.config.source_dir;
+
+    let Some(dir) = dir else {
+        let found = adopt::candidates(&session.layout.home, source, &session.layout.root);
+        if as_json {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&json!(found
+                    .iter()
+                    .map(|a| json!({ "name": a.name, "dir": a.dir, "found": a.found }))
+                    .collect::<Vec<_>>()))?
+            );
+            return Ok(());
+        }
+        if found.is_empty() {
+            println!("Nothing to adopt: no Claude config directories found outside ~/.claude.");
+            return Ok(());
+        }
+        println!("These directories can be managed where they are:\n");
+        for adoption in &found {
+            let known = session.config.profiles.contains_key(&adoption.name);
+            println!(
+                "  {:<12} {}{}",
+                adoption.name,
+                adoption.dir.display(),
+                if known { "   (already a profile)" } else { "" }
+            );
+            println!("               keeps: {}", adoption.found.join(", "));
+        }
+        println!("\nAdopt one with:  cpx adopt {}", found[0].dir.display());
+        return Ok(());
+    };
+
+    let adoption = adopt::inspect(&dir, source, name)?;
+    let text = std::fs::read_to_string(session.layout.config_file())?;
+    let edited = cpx_core::config_edit::add_adopted_profile(&text, &adoption)?;
+    std::fs::write(session.layout.config_file(), edited)?;
+
+    println!("Adopted {} as profile `{}`.", adoption.dir.display(), adoption.name);
+    println!("Left exactly as it is: {}", adoption.found.join(", "));
+
+    // The login is keyed to the directory path, which has not moved.
+    let status = cpx_core::credentials::status(&adoption.dir);
+    match (status.authenticated, status.account.as_deref()) {
+        (true, Some(account)) => println!("Still signed in as {account} — no need to log in again."),
+        (true, None) => println!("Still signed in — no need to log in again."),
+        (false, _) => println!("No login found for this directory yet."),
+    }
+
+    println!("\nRun `cpx apply` to add its command. Nothing inside the directory will change;");
+    println!("check with `cpx apply --dry-run` first if you want to see it.");
+    Ok(())
 }
 
 fn cmd_clone(from: &str, to: &str) -> Result<()> {

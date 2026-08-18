@@ -1,3 +1,4 @@
+pub mod adopt;
 pub mod install;
 pub mod config_edit;
 pub mod discovery;

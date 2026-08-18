@@ -1,6 +1,7 @@
 //! `~/.claude-profiles/config.toml` parsing and resolution.
 
 use crate::error::ConfigError;
+use crate::layout::Layout;
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -8,6 +9,10 @@ use std::path::{Path, PathBuf};
 /// How a resource is materialized into a profile directory.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ResourceMode {
+    /// cpx does not manage this resource at all: it plans nothing, creates
+    /// nothing, and reports nothing. The mode adoption uses for resources an
+    /// existing directory does not have, so cpx never litters it.
+    Ignore,
     /// Symlink to the resource under `source_dir`.
     Link,
     /// Copied once from source; refreshed by `apply --sync`.
@@ -42,6 +47,10 @@ pub struct ResourceSpec {
 #[derive(Debug, Clone)]
 pub struct Profile {
     pub description: String,
+    /// An existing config directory to manage in place, rather than one under
+    /// the cpx root. A login is keyed to its directory path, so adopting a
+    /// directory where it already sits avoids signing in again.
+    pub dir: Option<PathBuf>,
     /// A `#rrggbb` identity colour. Profiles are told apart at a glance by
     /// colour in the app and in a statusline, so it is part of the config
     /// rather than app-local preference.
@@ -64,6 +73,7 @@ pub struct Config {
 impl ResourceMode {
     pub fn as_str(self) -> &'static str {
         match self {
+            ResourceMode::Ignore => "ignore",
             ResourceMode::Link => "link",
             ResourceMode::Copy => "copy",
             ResourceMode::Own => "own",
@@ -73,6 +83,7 @@ impl ResourceMode {
 
     fn parse(raw: &str) -> Option<ResourceMode> {
         match raw {
+            "ignore" => Some(ResourceMode::Ignore),
             "link" => Some(ResourceMode::Link),
             "copy" => Some(ResourceMode::Copy),
             "own" => Some(ResourceMode::Own),
@@ -248,6 +259,7 @@ struct RawDefaults {
 struct RawProfile {
     #[serde(default)]
     description: String,
+    dir: Option<String>,
     color: Option<String>,
     model: Option<String>,
     #[serde(default)]
@@ -344,6 +356,7 @@ impl Config {
                 name.clone(),
                 Profile {
                     description: raw_profile.description.clone(),
+                    dir: raw_profile.dir.as_deref().map(|d| expand_path(d, home)),
                     color: match &raw_profile.color {
                         Some(color) => Some(validate_color(name, color)?),
                         None => None,
@@ -372,9 +385,24 @@ impl Config {
         })
     }
 
-    /// The directory a profile is materialized into.
-    pub fn profile_dir(&self, profiles_dir: &Path, name: &str) -> PathBuf {
-        profiles_dir.join(name)
+    /// What `CLAUDE_CONFIG_DIR` points at for this profile: an adopted
+    /// directory when one is configured, otherwise one under the cpx root.
+    pub fn config_dir(&self, layout: &Layout, name: &str) -> PathBuf {
+        match self.profiles.get(name).and_then(|p| p.dir.clone()) {
+            Some(dir) => dir,
+            None => layout.profile_dir(name),
+        }
+    }
+
+    /// Where cpx keeps its own artifacts for this profile. Always under the
+    /// cpx root, so adopting a directory never scatters cpx files through it.
+    pub fn support_dir(&self, layout: &Layout, name: &str) -> PathBuf {
+        layout.profile_dir(name)
+    }
+
+    /// The shim that makes a plain `claude` run under this profile.
+    pub fn shim_path(&self, layout: &Layout, name: &str) -> PathBuf {
+        layout.shim_path(name)
     }
 
     /// The wrapper script path for a profile.
@@ -648,5 +676,108 @@ mod color_tests {
                 "accepted {bad:?}"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod adoption_tests {
+    use super::*;
+    use crate::layout::Layout;
+
+    fn home() -> PathBuf {
+        PathBuf::from("/Users/tester")
+    }
+
+    fn parse(text: &str) -> Config {
+        Config::parse(text, &home()).expect("should parse")
+    }
+
+    fn layout() -> Layout {
+        Layout::new(home())
+    }
+
+    #[test]
+    fn a_profile_without_dir_lives_under_the_cpx_root() {
+        let cfg = parse("version = 1\n[profiles.work]\n");
+        assert_eq!(
+            cfg.config_dir(&layout(), "work"),
+            home().join(".claude-profiles/work")
+        );
+    }
+
+    #[test]
+    fn dir_points_the_config_directory_somewhere_else() {
+        let cfg = parse("version = 1\n[profiles.hd]\ndir = \"~/.claude-hd\"\n");
+        assert_eq!(cfg.config_dir(&layout(), "hd"), home().join(".claude-hd"));
+    }
+
+    #[test]
+    fn cpx_keeps_its_own_artifacts_out_of_an_adopted_directory() {
+        // The shim is cpx's, not the user's: it belongs under the cpx root
+        // even when the config directory is somewhere they already own.
+        let cfg = parse("version = 1\n[profiles.hd]\ndir = \"~/.claude-hd\"\n");
+        let l = layout();
+        assert_eq!(cfg.support_dir(&l, "hd"), home().join(".claude-profiles/hd"));
+        assert_eq!(
+            cfg.shim_path(&l, "hd"),
+            home().join(".claude-profiles/hd/bin/claude")
+        );
+        assert!(
+            !cfg.shim_path(&l, "hd").starts_with(home().join(".claude-hd")),
+            "adoption must not write cpx scaffolding into the adopted directory"
+        );
+    }
+
+    #[test]
+    fn an_absolute_dir_is_used_as_given() {
+        let cfg = parse("version = 1\n[profiles.hd]\ndir = \"/opt/claude-hd\"\n");
+        assert_eq!(cfg.config_dir(&layout(), "hd"), PathBuf::from("/opt/claude-hd"));
+    }
+
+    #[test]
+    fn ignore_is_a_resource_mode() {
+        let cfg = parse("version = 1\n[profiles.hd.resources]\ncommands = \"ignore\"\n");
+        assert_eq!(
+            cfg.profiles["hd"].resources[&ResourceKey::Commands].mode,
+            ResourceMode::Ignore
+        );
+        assert_eq!(ResourceMode::Ignore.as_str(), "ignore");
+    }
+
+    #[test]
+    fn ignore_is_allowed_for_every_resource() {
+        for key in ResourceKey::ALL {
+            let text = format!(
+                "version = 1\n[profiles.hd.resources]\n\"{}\" = \"ignore\"\n",
+                key.config_name()
+            );
+            assert!(
+                Config::parse(&text, &home()).is_ok(),
+                "ignore rejected for {}",
+                key.config_name()
+            );
+        }
+    }
+
+    #[test]
+    fn ignore_takes_no_patch() {
+        let text = r#"
+version = 1
+[profiles.hd.resources.settings]
+mode = "ignore"
+patch = { model = "sonnet" }
+"#;
+        assert!(matches!(
+            Config::parse(text, &home()),
+            Err(ConfigError::PatchOnNonMergeMode { .. })
+        ));
+    }
+
+    #[test]
+    fn a_dir_that_is_not_a_path_is_still_just_a_path() {
+        // No validation beyond expansion: the directory may not exist yet,
+        // and `adopt` is where existence is checked.
+        let cfg = parse("version = 1\n[profiles.hd]\ndir = \"~/nowhere\"\n");
+        assert_eq!(cfg.config_dir(&layout(), "hd"), home().join("nowhere"));
     }
 }

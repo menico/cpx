@@ -192,3 +192,67 @@ fn an_unwritable_profile_field_is_refused() {
     assert!(set_profile_field(WITH_COMMENTS, "work", "resources", Some("x")).is_err());
     assert!(set_profile_field(WITH_COMMENTS, "work", "nonsense", Some("x")).is_err());
 }
+
+// --- adoption ---
+
+fn adoption_of(dir: &std::path::Path) -> cpx_core::adopt::Adoption {
+    use cpx_core::config::{ResourceKey, ResourceMode};
+    let mut resources = std::collections::BTreeMap::new();
+    for key in ResourceKey::ALL {
+        resources.insert(
+            key,
+            match key {
+                ResourceKey::Plugins | ResourceKey::Projects | ResourceKey::Settings => {
+                    ResourceMode::Own
+                }
+                _ => ResourceMode::Ignore,
+            },
+        );
+    }
+    cpx_core::adopt::Adoption {
+        name: "hd".into(),
+        dir: dir.to_path_buf(),
+        resources,
+        found: vec!["plugins".into()],
+    }
+}
+
+#[test]
+fn an_adopted_profile_records_its_directory_and_modes() {
+    let out =
+        add_adopted_profile(WITH_COMMENTS, &adoption_of(std::path::Path::new("/Users/tester/.claude-hd")))
+            .unwrap();
+    let cfg = parse(&out);
+    let profile = &cfg.profiles["hd"];
+    assert_eq!(
+        profile.dir.as_deref(),
+        Some(std::path::Path::new("/Users/tester/.claude-hd"))
+    );
+    assert_eq!(
+        profile.resources[&cpx_core::config::ResourceKey::Plugins].mode,
+        cpx_core::config::ResourceMode::Own
+    );
+    assert_eq!(
+        profile.resources[&cpx_core::config::ResourceKey::Commands].mode,
+        cpx_core::config::ResourceMode::Ignore
+    );
+}
+
+#[test]
+fn adopting_leaves_existing_profiles_alone() {
+    let out =
+        add_adopted_profile(WITH_COMMENTS, &adoption_of(std::path::Path::new("/x/.claude-hd"))).unwrap();
+    let cfg = parse(&out);
+    assert_eq!(cfg.profiles["work"].model.as_deref(), Some("sonnet"));
+    assert!(out.contains("# my settings"), "{out}");
+}
+
+#[test]
+fn adopting_a_name_that_is_taken_is_refused() {
+    let mut adoption = adoption_of(std::path::Path::new("/x/.claude-hd"));
+    adoption.name = "work".into();
+    assert!(matches!(
+        add_adopted_profile(WITH_COMMENTS, &adoption),
+        Err(EditError::ProfileExists(_))
+    ));
+}

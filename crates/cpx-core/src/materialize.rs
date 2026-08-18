@@ -97,6 +97,9 @@ fn plan_resource(
     let label = key.config_name();
 
     match spec.mode {
+        // Managed by nobody: cpx neither creates nor inspects it.
+        ResourceMode::Ignore => {}
+
         ResourceMode::Link => {
             if !src.exists() {
                 plan.note(format!(
@@ -224,17 +227,17 @@ fn plan_scripts(
     name: &str,
     profile: &Profile,
 ) -> Result<(), PlanError> {
-    let profile_dir = layout.profile_dir(name);
+    let config_dir = config.config_dir(layout, name);
     let ctx = WrapperContext {
         name,
         profile,
-        profile_dir: &profile_dir,
+        profile_dir: &config_dir,
         claude_binary: &options.claude_binary,
     };
 
     for (path, content, what) in [
         (config.wrapper_path(name), wrapper_script(&ctx), "wrapper"),
-        (layout.shim_path(name), shim_script(&ctx), "shim"),
+        (config.shim_path(layout, name), shim_script(&ctx), "shim"),
     ] {
         let ownership = state.classify(&path).map_err(io(&path))?;
         let actual = hash_path(&path).map_err(io(&path))?;
@@ -317,7 +320,9 @@ pub fn plan_apply(
     let mut plan = Plan::default();
 
     for (name, profile) in &config.profiles {
-        let dir = layout.profile_dir(name);
+        // The config directory may be one the user already owns; cpx's own
+        // artifacts always live under its own root.
+        let dir = config.config_dir(layout, name);
         for path in [dir.clone(), layout.profile_bin_dir(name)] {
             if std::fs::symlink_metadata(&path).is_err() {
                 plan.push(

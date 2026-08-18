@@ -300,3 +300,110 @@ fn run_before_apply_points_at_apply() {
     cpx.initialised();
     assert!(cpx.fails(&["run", "work"]).contains("cpx apply"));
 }
+
+// --- adoption ---
+
+impl Cpx {
+    /// A hand-rolled config directory outside the cpx root, shaped like a
+    /// real one: its own settings, plugins and projects.
+    fn hand_rolled(&self, name: &str) -> PathBuf {
+        let dir = self.home().join(format!(".claude-{name}"));
+        fs::create_dir_all(dir.join("plugins")).unwrap();
+        fs::create_dir_all(dir.join("projects")).unwrap();
+        fs::write(dir.join("settings.json"), r#"{"model":"sonnet"}"#).unwrap();
+        fs::write(dir.join("plugins/keep.json"), "precious").unwrap();
+        dir
+    }
+}
+
+#[test]
+fn adopt_with_no_arguments_lists_what_could_be_adopted() {
+    let cpx = Cpx::new();
+    cpx.initialised();
+    cpx.hand_rolled("hd");
+    let out = cpx.ok(&["adopt"]);
+    assert!(out.contains("hd"), "{out}");
+    assert!(out.contains(".claude-hd"), "{out}");
+}
+
+#[test]
+fn adopt_lists_nothing_when_there_is_nothing_to_adopt() {
+    let cpx = Cpx::new();
+    cpx.initialised();
+    assert!(cpx.ok(&["adopt"]).contains("Nothing to adopt"));
+}
+
+#[test]
+fn adopting_registers_the_profile_at_its_existing_location() {
+    let cpx = Cpx::new();
+    cpx.initialised();
+    let dir = cpx.hand_rolled("hd");
+
+    let out = cpx.ok(&["adopt", dir.to_str().unwrap()]);
+    assert!(out.contains("Adopted"), "{out}");
+    assert!(cpx.ok(&["list"]).contains("hd"));
+    assert!(cpx.ok(&["show", "hd"]).contains(".claude-hd"), "should point at the adopted dir");
+}
+
+#[test]
+fn applying_an_adopted_profile_changes_nothing_inside_it() {
+    let cpx = Cpx::new();
+    cpx.initialised();
+    let dir = cpx.hand_rolled("hd");
+    cpx.ok(&["adopt", dir.to_str().unwrap()]);
+
+    let before: Vec<_> = fs::read_dir(&dir).unwrap().flatten().map(|e| e.file_name()).collect();
+    cpx.ok(&["apply"]);
+    let after: Vec<_> = fs::read_dir(&dir).unwrap().flatten().map(|e| e.file_name()).collect();
+
+    assert_eq!(before.len(), after.len(), "adoption added or removed entries");
+    assert_eq!(fs::read_to_string(dir.join("plugins/keep.json")).unwrap(), "precious");
+    assert_eq!(fs::read_to_string(dir.join("settings.json")).unwrap(), r#"{"model":"sonnet"}"#);
+    assert!(!dir.join("bin").exists(), "the shim must not land in the adopted directory");
+    assert!(!dir.join("commands").exists(), "ignored resources must not be created");
+}
+
+#[test]
+fn an_adopted_profile_still_gets_its_command() {
+    let cpx = Cpx::new();
+    cpx.initialised();
+    let dir = cpx.hand_rolled("hd");
+    cpx.ok(&["adopt", dir.to_str().unwrap()]);
+    cpx.ok(&["apply"]);
+
+    let wrapper = cpx.home().join(".local/bin/claude-hd");
+    assert!(wrapper.is_file());
+    assert!(
+        fs::read_to_string(&wrapper).unwrap().contains(".claude-hd"),
+        "the command must point at the adopted directory"
+    );
+}
+
+#[test]
+fn adopting_the_same_directory_twice_is_refused() {
+    let cpx = Cpx::new();
+    cpx.initialised();
+    let dir = cpx.hand_rolled("hd");
+    cpx.ok(&["adopt", dir.to_str().unwrap()]);
+    assert!(cpx.fails(&["adopt", dir.to_str().unwrap()]).contains("hd"));
+}
+
+#[test]
+fn adopting_a_directory_that_is_not_a_config_dir_is_refused() {
+    let cpx = Cpx::new();
+    cpx.initialised();
+    let plain = cpx.home().join("Documents");
+    fs::create_dir_all(&plain).unwrap();
+    assert!(cpx
+        .fails(&["adopt", plain.to_str().unwrap()])
+        .contains("does not look like"));
+}
+
+#[test]
+fn an_adopted_profile_can_be_given_a_different_name() {
+    let cpx = Cpx::new();
+    cpx.initialised();
+    let dir = cpx.hand_rolled("hd");
+    cpx.ok(&["adopt", dir.to_str().unwrap(), "--name", "company"]);
+    assert!(cpx.ok(&["list"]).contains("claude-company"));
+}

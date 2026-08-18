@@ -58,6 +58,8 @@ pub fn run() {
             commands::clone_profile,
             commands::set_field,
             commands::set_resource,
+            commands::adoption_candidates,
+            commands::adopt,
             commands::config_path,
             commands::auth,
             commands::reveal,

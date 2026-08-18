@@ -140,7 +140,7 @@ fn check_environment(config: &Config, ambient: &Ambient, checks: &mut Vec<Check>
 
 fn check_profiles(config: &Config, layout: &Layout, checks: &mut Vec<Check>) {
     for name in config.profiles.keys() {
-        let dir = layout.profile_dir(name);
+        let dir = config.config_dir(layout, name);
         if !dir.is_dir() {
             checks.push(finding(
                 Severity::Error,
