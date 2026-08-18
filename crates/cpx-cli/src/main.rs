@@ -311,13 +311,28 @@ fn cmd_list(as_json: bool) -> Result<()> {
         }));
     }
 
+    let default = cpx_core::default_session::default_session(&session.layout, &session.config);
+
     if as_json {
-        println!("{}", serde_json::to_string_pretty(&rows)?);
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({
+                "profiles": rows,
+                "defaultSession": {
+                    "directory": default.dir,
+                    "account": default.account,
+                    "signedIn": default.signed_in,
+                    "isSource": default.is_source,
+                    "claimedBy": default.claimed_by,
+                },
+            }))?
+        );
         return Ok(());
     }
 
     if rows.is_empty() {
         println!("No profiles configured. Add one with `cpx profile add <name>`.");
+        print_default_session(&default);
         return Ok(());
     }
 
@@ -337,7 +352,32 @@ fn cmd_list(as_json: bool) -> Result<()> {
             row["command"].as_str().unwrap_or(""),
         );
     }
+
+    print_default_session(&default);
     Ok(())
+}
+
+/// Report the directory a plain `claude` uses. cpx treats it as the source
+/// profiles inherit from rather than as a profile, but it is usually a
+/// working account, and leaving it out would show fewer accounts than the
+/// machine has.
+fn print_default_session(default: &cpx_core::default_session::DefaultSession) {
+    // Already listed above under its own name.
+    if default.claimed_by.is_some() {
+        return;
+    }
+
+    println!();
+    println!("Not managed by cpx:");
+    let who = match (&default.signed_in, &default.account) {
+        (true, Some(account)) => account.clone(),
+        (true, None) => "signed in".to_string(),
+        (false, _) => "not signed in".to_string(),
+    };
+    println!("  {:<14} {:<24} {}", "claude", who, default.dir.display());
+    if default.is_source {
+        println!("  This is also the directory your profiles inherit from.");
+    }
 }
 
 fn cmd_show(name: &str, as_json: bool) -> Result<()> {

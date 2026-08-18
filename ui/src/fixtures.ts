@@ -6,6 +6,7 @@
 // absent, so the packaged app never reaches them.
 import type {
   AdoptionRow,
+  DefaultSession,
   ApplyView,
   BindingRow,
   CheckView,
@@ -26,6 +27,14 @@ const RESOURCES: { resource: string; mode: ResourceMode; dir: boolean; json: boo
   { resource: "hooks", mode: "link", dir: true, json: false },
   { resource: "projects", mode: "own", dir: true, json: false },
 ];
+
+const DEFAULT_SESSION: DefaultSession = {
+  dir: "/Users/you/.claude",
+  account: "you@company.com",
+  signedIn: true,
+  isSource: true,
+  claimedBy: null,
+};
 
 const ADOPTABLE: AdoptionRow[] = [
   {
@@ -175,6 +184,7 @@ export const fixtures = {
   cloneProfile: unsupported,
   setField: () => Promise.resolve(),
   setResource: () => Promise.resolve(),
+  defaultSession: () => Promise.resolve(DEFAULT_SESSION),
   adoptionCandidates: () => Promise.resolve(ADOPTABLE),
   adopt: unsupported,
   configPath: () => Promise.resolve("/Users/you/.claude-profiles/config.toml"),

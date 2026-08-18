@@ -78,6 +78,16 @@ export interface CheckView {
   remedy: string | null;
 }
 
+export interface DefaultSession {
+  dir: string;
+  account: string | null;
+  signedIn: boolean;
+  /** Also the directory profiles inherit from. */
+  isSource: boolean;
+  /** Set when a profile already manages it, in which case it is listed above. */
+  claimedBy: string | null;
+}
+
 export interface AdoptionRow {
   name: string;
   dir: string;
@@ -115,6 +125,7 @@ const real = {
     invoke<void>("set_field", { profile, field, value }),
   setResource: (profile: string, resource: string, mode: ResourceMode) =>
     invoke<void>("set_resource", { profile, resource, mode }),
+  defaultSession: () => invoke<DefaultSession>("default_session"),
   adoptionCandidates: () => invoke<AdoptionRow[]>("adoption_candidates"),
   adopt: (dir: string, name: string | null) => invoke<void>("adopt", { dir, name }),
   configPath: () => invoke<string>("config_path"),

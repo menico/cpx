@@ -116,7 +116,7 @@ fn the_account_email_comes_from_claude_json() {
         r#"{"oauthAccount":{"emailAddress":"me@example.com","organizationUuid":"org-1"}}"#,
     )
     .unwrap();
-    let (email, org) = account_from_claude_json(d.path());
+    let (email, org) = account_from_claude_json(d.path(), d.path());
     assert_eq!(email.as_deref(), Some("me@example.com"));
     assert_eq!(org.as_deref(), Some("org-1"));
 }
@@ -124,9 +124,9 @@ fn the_account_email_comes_from_claude_json() {
 #[test]
 fn a_missing_or_unparseable_claude_json_yields_no_account() {
     let d = TempDir::new().unwrap();
-    assert_eq!(account_from_claude_json(d.path()), (None, None));
+    assert_eq!(account_from_claude_json(d.path(), d.path()), (None, None));
     fs::write(d.path().join(".claude.json"), "not json at all").unwrap();
-    assert_eq!(account_from_claude_json(d.path()), (None, None));
+    assert_eq!(account_from_claude_json(d.path(), d.path()), (None, None));
 }
 
 #[test]
@@ -193,4 +193,44 @@ fn a_directory_merely_named_claude_elsewhere_is_not_the_default() {
         KEYCHAIN_SERVICE_BASE,
         "only the default directory under this home is the default session"
     );
+}
+
+#[test]
+fn the_default_session_account_is_read_from_the_sibling_claude_json() {
+    // Verified on a real machine: for the default config directory the
+    // account lives in ~/.claude.json, while ~/.claude/.claude.json exists
+    // but carries no oauthAccount. A custom directory keeps it inside.
+    let home = TempDir::new().unwrap();
+    let default_dir = home.path().join(".claude");
+    fs::create_dir_all(&default_dir).unwrap();
+    fs::write(default_dir.join(".claude.json"), r#"{"tips":1}"#).unwrap();
+    fs::write(
+        home.path().join(".claude.json"),
+        r#"{"oauthAccount":{"emailAddress":"default@example.com"}}"#,
+    )
+    .unwrap();
+
+    let (account, _) = account_from_claude_json(&default_dir, home.path());
+    assert_eq!(account.as_deref(), Some("default@example.com"));
+}
+
+#[test]
+fn a_custom_directory_keeps_its_account_inside_itself() {
+    let home = TempDir::new().unwrap();
+    let dir = home.path().join(".claude-hd");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(
+        dir.join(".claude.json"),
+        r#"{"oauthAccount":{"emailAddress":"hd@example.com"}}"#,
+    )
+    .unwrap();
+    // A sibling file must not be preferred for a custom directory.
+    fs::write(
+        home.path().join(".claude.json"),
+        r#"{"oauthAccount":{"emailAddress":"default@example.com"}}"#,
+    )
+    .unwrap();
+
+    let (account, _) = account_from_claude_json(&dir, home.path());
+    assert_eq!(account.as_deref(), Some("hd@example.com"));
 }

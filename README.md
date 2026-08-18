@@ -189,6 +189,9 @@ overrides whichever profile you think you are using.
 
 ## Notes
 
+- **`~/.claude` is shown but never managed.** It is the directory profiles
+  inherit from, and usually a working account in its own right, so `cpx list`
+  and the app report which account it is signed into and leave it alone.
 - **Existing `~/.claude-*` directories are adopted in place, not moved.** A
   login is keyed to its config directory's path, so `cpx adopt` manages the
   directory where it already sits and you never sign in again.

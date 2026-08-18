@@ -188,6 +188,9 @@ button { font: inherit; color: inherit; }
 .sub > * { flex: none; }
 .sub > .trunc { flex: 1; min-width: 0; }
 
+/* Explanatory lines are sentences, not identifiers: let them wrap. */
+.sub.wrap { white-space: normal; }
+
 .sub .mono { font-family: var(--mono); font-size: 11px; }
 
 .trunc { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -590,3 +593,24 @@ select { cursor: default; padding-right: 22px; }
   gap: 6px;
   margin-top: 12px;
 }
+
+/* ---------- the unmanaged default session ---------- */
+
+.unmanaged {
+  margin-top: 6px;
+  border-top: 1px solid var(--line);
+  padding-top: 12px;
+}
+
+.unmanaged-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 0;
+  /* No identity bar: colour in this interface means "a profile cpx manages",
+     and this is deliberately not one. */
+  opacity: 0.82;
+}
+
+.unmanaged-row .grow { flex: 1; min-width: 0; overflow: hidden; }
+.unmanaged-row .name { font-size: 12.5px; }

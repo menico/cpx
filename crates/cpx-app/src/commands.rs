@@ -190,6 +190,15 @@ pub fn set_resource(profile: String, resource: String, mode: String) -> Answer<(
     edit(|text| config_edit::set_resource_mode(text, &profile, &resource, &mode))
 }
 
+/// The directory a plain `claude` uses. Reported, never managed.
+#[tauri::command]
+pub fn default_session() -> Answer<DefaultSessionView> {
+    let install = install()?;
+    Ok(default_session_view(
+        &cpx_core::default_session::default_session(&install.layout, &install.config),
+    ))
+}
+
 /// Directories that could be managed in place, with what each would keep.
 #[tauri::command]
 pub fn adoption_candidates() -> Answer<Vec<AdoptionRow>> {

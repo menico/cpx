@@ -94,6 +94,19 @@ pub struct CheckView {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct DefaultSessionView {
+    pub dir: String,
+    pub account: Option<String>,
+    pub signed_in: bool,
+    /// True when this is also the directory profiles inherit from.
+    pub is_source: bool,
+    /// Set when a profile already manages this directory, in which case it
+    /// needs no separate mention.
+    pub claimed_by: Option<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AdoptionRow {
     pub name: String,
     pub dir: String,
@@ -242,6 +255,18 @@ pub fn binding_rows(bindings: &Bindings, config: &Config) -> Vec<BindingRow> {
             }
         })
         .collect()
+}
+
+pub fn default_session_view(
+    session: &cpx_core::default_session::DefaultSession,
+) -> DefaultSessionView {
+    DefaultSessionView {
+        dir: session.dir.display().to_string(),
+        account: session.account.clone(),
+        signed_in: session.signed_in,
+        is_source: session.is_source,
+        claimed_by: session.claimed_by.clone(),
+    }
 }
 
 pub fn adoption_rows(found: &[cpx_core::adopt::Adoption], config: &Config) -> Vec<AdoptionRow> {

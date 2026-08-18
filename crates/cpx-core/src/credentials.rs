@@ -109,21 +109,39 @@ pub fn keychain_has_entry(service: &str, account: &str) -> bool {
     lookup()(service, account)
 }
 
-/// The account recorded in a profile's `.claude.json`, which Claude Code
-/// writes regardless of where the token itself is stored.
-pub fn account_from_claude_json(profile_dir: &Path) -> (Option<String>, Option<String>) {
-    let Ok(text) = std::fs::read_to_string(profile_dir.join(".claude.json")) else {
-        return (None, None);
-    };
-    let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) else {
-        return (None, None);
-    };
-    let account = value.pointer("/oauthAccount/emailAddress");
-    let org = value.pointer("/oauthAccount/organizationUuid");
-    (
-        account.and_then(|v| v.as_str()).map(str::to_string),
-        org.and_then(|v| v.as_str()).map(str::to_string),
-    )
+/// The account recorded in `.claude.json`, which Claude Code writes
+/// regardless of where the token itself is stored.
+///
+/// For a custom `CLAUDE_CONFIG_DIR` that file sits inside the directory. For
+/// the default directory it sits beside it, at `~/.claude.json`, and the file
+/// inside carries no account — so the default session would otherwise report
+/// as signed in to nobody.
+pub fn account_from_claude_json(profile_dir: &Path, home: &Path) -> (Option<String>, Option<String>) {
+    let mut candidates = vec![profile_dir.join(".claude.json")];
+    if profile_dir == home.join(".claude") {
+        candidates.push(home.join(".claude.json"));
+    }
+
+    for path in candidates {
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) else {
+            continue;
+        };
+        let account = value
+            .pointer("/oauthAccount/emailAddress")
+            .and_then(|v| v.as_str())
+            .map(str::to_string);
+        if account.is_some() {
+            let org = value
+                .pointer("/oauthAccount/organizationUuid")
+                .and_then(|v| v.as_str())
+                .map(str::to_string);
+            return (account, org);
+        }
+    }
+    (None, None)
 }
 
 /// Whether the credentials file records an expiry in the past.
@@ -143,7 +161,7 @@ fn file_expired(path: &Path) -> Option<bool> {
 /// `home` is needed to recognise the default config directory, whose token
 /// lives under the unsuffixed Keychain service.
 pub fn status(profile_dir: &Path, home: &Path) -> CredentialStatus {
-    let (account, organization) = account_from_claude_json(profile_dir);
+    let (account, organization) = account_from_claude_json(profile_dir, home);
 
     if keychain_has_entry(
         &keychain_service_for(profile_dir, home),

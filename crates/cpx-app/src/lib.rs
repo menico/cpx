@@ -106,6 +106,7 @@ pub fn run() {
             commands::clone_profile,
             commands::set_field,
             commands::set_resource,
+            commands::default_session,
             commands::adoption_candidates,
             commands::adopt,
             commands::config_path,

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { api, message } from "./api";
 import type {
   AdoptionRow,
+  DefaultSession as Session,
   BindingRow,
   CheckView,
   PlanView,
@@ -11,6 +12,7 @@ import type {
 import { Adoptable } from "./Adoptable";
 import { AskSheet, type Ask } from "./Ask";
 import { Bindings } from "./Bindings";
+import { DefaultSession } from "./DefaultSession";
 import { Health } from "./Health";
 import { PlanSheet } from "./PlanSheet";
 import { ProfileDetail, SWATCHES } from "./ProfileDetail";
@@ -23,6 +25,7 @@ export function App() {
   const [bindings, setBindings] = useState<BindingRow[]>([]);
   const [checks, setChecks] = useState<CheckView[]>([]);
   const [adoptable, setAdoptable] = useState<AdoptionRow[]>([]);
+  const [defaultSession, setDefaultSession] = useState<Session | null>(null);
   const [plan, setPlan] = useState<PlanView | null>(null);
   const [tab, setTab] = useState<Tab>("profiles");
   const [selected, setSelected] = useState<Detail | null>(null);
@@ -37,18 +40,20 @@ export function App() {
       setReady(initialised);
       if (!initialised) return;
 
-      const [rows, bound, health, pending, candidates] = await Promise.all([
+      const [rows, bound, health, pending, candidates, unmanaged] = await Promise.all([
         api.profiles(),
         api.bindings(),
         api.checks(),
         api.plan(),
         api.adoptionCandidates(),
+        api.defaultSession(),
       ]);
       setProfiles(rows);
       setBindings(bound);
       setChecks(health);
       setPlan(pending);
       setAdoptable(candidates);
+      setDefaultSession(unmanaged);
       setError(null);
 
       // Keep an open detail panel in step with the config it is showing.
@@ -266,6 +271,7 @@ export function App() {
               </button>
               ))
             )}
+            {defaultSession && <DefaultSession session={defaultSession} />}
             <Adoptable candidates={adoptable} onAdopt={adoptDirectory} />
           </>
         )}
