@@ -38,7 +38,55 @@ fn hide_window(window: tauri::Window) {
     let _ = window.hide();
 }
 
+/// Replace the stub `PATH` macOS gives a Finder-launched app with the one a
+/// terminal would have.
+///
+/// Without this the app cannot find the Claude binary, reports direnv and
+/// `~/.local/bin` as missing, and — worst — writes wrappers that exec a bare
+/// `claude`, losing the absolute path that stops a wrapper directory from
+/// shadowing the real binary.
+fn restore_user_path() {
+    let current = std::env::var("PATH").unwrap_or_default();
+    let Some(login) = cpx_core::env_path::login_path() else {
+        return;
+    };
+    std::env::set_var("PATH", cpx_core::env_path::merge_paths(&login, &current));
+}
+
+/// Print what the app resolved from its environment, then exit.
+///
+/// A GUI app's environment is invisible from a terminal, so when the health
+/// checks disagree with reality this is how to see what it actually had.
+fn diagnose() {
+    println!("PATH      {}", std::env::var("PATH").unwrap_or_default());
+    match cpx_core::install::layout_from_env() {
+        Ok(layout) => {
+            println!("home      {}", layout.home.display());
+            println!("root      {}", layout.root.display());
+            match cpx_core::discovery::resolve_claude_binary(
+                &std::env::var("PATH").unwrap_or_default(),
+                &layout,
+            ) {
+                Some(path) => println!("claude    {}", path.display()),
+                None => println!("claude    NOT FOUND"),
+            }
+        }
+        Err(e) => println!("layout    {e}"),
+    }
+    match cpx_core::install::which("direnv") {
+        Some(path) => println!("direnv    {}", path.display()),
+        None => println!("direnv    NOT FOUND"),
+    }
+}
+
 pub fn run() {
+    restore_user_path();
+
+    if std::env::args().any(|arg| arg == "--diagnose") {
+        diagnose();
+        return;
+    }
+
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())

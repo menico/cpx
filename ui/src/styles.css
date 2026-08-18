@@ -149,8 +149,9 @@ button { font: inherit; color: inherit; }
 .row:hover { background: var(--raised); }
 
 /* The identity bar. This is the through-line: the same colour appears on the
-   profile, on every directory bound to it, and in its statusline. */
-.row .bar {
+   profile, on every directory bound to it, and anywhere it is chosen. */
+.row .bar,
+.ask-option .bar {
   position: absolute;
   left: 0;
   top: 0;
@@ -507,3 +508,85 @@ select { cursor: default; padding-right: 22px; }
 .adopt-row:last-child { border-bottom: 0; }
 .adopt-row .grow { flex: 1; min-width: 0; overflow: hidden; }
 .adopt-row .name { font-size: 12.5px; }
+
+/* ---------- asking a question ----------
+   `window.prompt` and `confirm` return null in the app's webview without
+   showing anything, so every question is asked here instead. */
+
+.ask-backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: rgb(16 18 22 / 0.42);
+  animation: fade 140ms ease-out;
+}
+
+@keyframes fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.ask {
+  width: 100%;
+  max-width: 340px;
+  max-height: 100%;
+  overflow-y: auto;
+  padding: 14px;
+  border-radius: 10px;
+  border: 1px solid var(--line-strong);
+  background: var(--raised);
+  box-shadow: var(--shadow);
+}
+
+.ask-title {
+  font-family: var(--mono);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.ask-detail {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 11.5px;
+  line-height: 1.4;
+  word-break: break-all;
+}
+
+.ask input[type="text"] { margin-top: 10px; }
+
+.ask-options {
+  margin-top: 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  overflow: hidden;
+}
+
+.ask-option {
+  position: relative;
+  display: flex;
+  align-items: center;
+  width: 100%;
+  padding: 7px 10px 7px 13px;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  background: transparent;
+  text-align: left;
+  cursor: default;
+}
+
+.ask-option:last-child { border-bottom: 0; }
+.ask-option:hover { background: var(--sunken); }
+.ask-option .grow { flex: 1; min-width: 0; overflow: hidden; }
+.ask-option .name { font-size: 12.5px; }
+
+.ask-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-top: 12px;
+}

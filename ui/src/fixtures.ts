@@ -180,6 +180,6 @@ export const fixtures = {
   configPath: () => Promise.resolve("/Users/you/.claude-profiles/config.toml"),
   auth: unsupported,
   reveal: () => Promise.resolve(),
-  pickDirectory: () => Promise.resolve(null),
+  pickDirectory: () => Promise.resolve("/Users/you/Work/new-project"),
   hideWindow: () => Promise.resolve(),
 };

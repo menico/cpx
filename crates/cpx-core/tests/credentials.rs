@@ -66,7 +66,7 @@ fn an_unusable_user_name_falls_back_the_way_claude_code_does() {
 fn an_absent_profile_is_not_authenticated() {
     stub_keychain();
     let d = TempDir::new().unwrap();
-    let status = status(&d.path().join("never-created"));
+    let status = status(&d.path().join("never-created"), d.path());
     assert!(!status.authenticated);
     assert_eq!(status.source, CredentialSource::None);
 }
@@ -75,7 +75,7 @@ fn an_absent_profile_is_not_authenticated() {
 fn a_keychain_entry_makes_a_profile_authenticated() {
     set_keychain_lookup(|_, _| true);
     let d = TempDir::new().unwrap();
-    let status = status(d.path());
+    let status = status(d.path(), d.path());
     assert!(status.authenticated);
     assert_eq!(status.source, CredentialSource::Keychain);
 }
@@ -90,7 +90,7 @@ fn a_credentials_file_authenticates_when_there_is_no_keychain() {
     )
     .unwrap();
 
-    let status = status(d.path());
+    let status = status(d.path(), d.path());
     assert!(status.authenticated);
     assert_eq!(status.source, CredentialSource::File);
     assert_eq!(status.expired, Some(false));
@@ -105,7 +105,7 @@ fn an_expired_credentials_file_is_reported_as_expired() {
         r#"{"claudeAiOauth":{"expiresAt":1000}}"#,
     )
     .unwrap();
-    assert_eq!(status(d.path()).expired, Some(true));
+    assert_eq!(status(d.path(), d.path()).expired, Some(true));
 }
 
 #[test]
@@ -138,7 +138,7 @@ fn status_reports_the_account_alongside_the_source() {
         r#"{"oauthAccount":{"emailAddress":"me@example.com"}}"#,
     )
     .unwrap();
-    assert_eq!(status(d.path()).account.as_deref(), Some("me@example.com"));
+    assert_eq!(status(d.path(), d.path()).account.as_deref(), Some("me@example.com"));
 }
 
 #[test]
@@ -159,4 +159,38 @@ fn service_names_match_claude_codes_own_keychain_entries() {
             "config dir {dir}"
         );
     }
+}
+
+#[test]
+fn the_default_config_directory_uses_the_unsuffixed_service() {
+    // Claude Code stores the default session under the bare service name.
+    // Verified on a real machine: `Claude Code-credentials` exists, while
+    // `Claude Code-credentials-010ed29c` — the digest of ~/.claude — does
+    // not. Deriving a suffix here would report the default session, which is
+    // usually the busiest account, as signed out.
+    let home = Path::new("/Users/menikoppenhol");
+    assert_eq!(
+        keychain_service_for(&home.join(".claude"), home),
+        KEYCHAIN_SERVICE_BASE
+    );
+}
+
+#[test]
+fn any_other_directory_still_gets_a_digest_suffix() {
+    let home = Path::new("/Users/menikoppenhol");
+    assert_eq!(
+        keychain_service_for(&home.join(".claude-hd"), home),
+        format!("{KEYCHAIN_SERVICE_BASE}-a81467e4")
+    );
+}
+
+#[test]
+fn a_directory_merely_named_claude_elsewhere_is_not_the_default() {
+    let home = Path::new("/Users/menikoppenhol");
+    let elsewhere = Path::new("/opt/.claude");
+    assert_ne!(
+        keychain_service_for(elsewhere, home),
+        KEYCHAIN_SERVICE_BASE,
+        "only the default directory under this home is the default session"
+    );
 }

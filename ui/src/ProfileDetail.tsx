@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { ProfileDetail as Detail, ResourceMode } from "./api";
 import { api } from "./api";
+import type { Ask } from "./Ask";
 
 /** Eight identity colours, spaced far enough apart to tell apart at 3px wide. */
 export const SWATCHES = [
@@ -34,9 +35,10 @@ interface Props {
   onBack: () => void;
   onChanged: () => void;
   onError: (message: string) => void;
+  onAsk: (ask: Ask) => void;
 }
 
-export function ProfileDetail({ detail, onBack, onChanged, onError }: Props) {
+export function ProfileDetail({ detail, onBack, onChanged, onError, onAsk }: Props) {
   const { row } = detail;
   const [model, setModel] = useState(row.model ?? "");
   const [description, setDescription] = useState(row.description);
@@ -216,23 +218,35 @@ export function ProfileDetail({ detail, onBack, onChanged, onError }: Props) {
         <div className="group">
           <button
             className="btn small"
-            onClick={() => {
-              const name = prompt(`Copy ${row.name}'s settings to a new profile named:`);
-              if (name) guard(() => api.cloneProfile(row.name, name));
-            }}
+            onClick={() =>
+              onAsk({
+                kind: "text",
+                title: `Duplicate ${row.name}`,
+                detail: "Copies its settings. The login is not copied — sign the new one in.",
+                placeholder: `${row.name}-2`,
+                submit: "Duplicate",
+                onSubmit: (name) => guard(() => api.cloneProfile(row.name, name)),
+              })
+            }
           >
             Duplicate…
           </button>{" "}
           <button
             className="btn small danger"
-            onClick={() => {
-              if (confirm(`Remove ${row.name} from the config? Its directory stays on disk.`)) {
-                guard(async () => {
-                  await api.removeProfile(row.name);
-                  onBack();
-                });
-              }
-            }}
+            onClick={() =>
+              onAsk({
+                kind: "confirm",
+                title: `Remove ${row.name}?`,
+                detail: `Removes it from the config. ${row.directory} stays on disk, with its login intact.`,
+                confirm: "Remove",
+                danger: true,
+                onConfirm: () =>
+                  guard(async () => {
+                    await api.removeProfile(row.name);
+                    onBack();
+                  }),
+              })
+            }
           >
             Remove…
           </button>

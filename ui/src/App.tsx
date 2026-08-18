@@ -9,6 +9,7 @@ import type {
   ProfileRow,
 } from "./api";
 import { Adoptable } from "./Adoptable";
+import { AskSheet, type Ask } from "./Ask";
 import { Bindings } from "./Bindings";
 import { Health } from "./Health";
 import { PlanSheet } from "./PlanSheet";
@@ -26,6 +27,7 @@ export function App() {
   const [tab, setTab] = useState<Tab>("profiles");
   const [selected, setSelected] = useState<Detail | null>(null);
   const [showPlan, setShowPlan] = useState(false);
+  const [ask, setAsk] = useState<Ask | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -103,16 +105,24 @@ export function App() {
     }
   }
 
-  async function addProfile() {
-    const name = prompt("Name for the new profile (this becomes its command, e.g. work):");
-    if (!name) return;
-    await run(async () => {
-      await api.addProfile(name, "");
-      // Give it the next unused identity colour so it is distinguishable
-      // immediately, rather than making the user pick before it means anything.
-      const used = new Set(profiles.map((p) => p.color));
-      const colour = SWATCHES.find((c) => !used.has(c)) ?? SWATCHES[0];
-      await api.setField(name, "color", colour);
+  function addProfile() {
+    setAsk({
+      kind: "text",
+      title: "New profile",
+      detail: "The name becomes its command: work gives you claude-work.",
+      placeholder: "work",
+      submit: "Create",
+      onSubmit: (name) => {
+        setAsk(null);
+        void run(async () => {
+          await api.addProfile(name, "");
+          // Give it the next unused identity colour straight away, so it is
+          // distinguishable before anyone has chosen anything.
+          const used = new Set(profiles.map((p) => p.color));
+          const colour = SWATCHES.find((c) => !used.has(c)) ?? SWATCHES[0];
+          await api.setField(name, "color", colour);
+        });
+      },
     });
   }
 
@@ -123,12 +133,26 @@ export function App() {
   async function bindDirectory() {
     const dir = await api.pickDirectory();
     if (!dir) return;
-    const profile =
-      profiles.length === 1
-        ? profiles[0].name
-        : prompt(`Which profile should ${dir} use?\n\n${profiles.map((p) => p.name).join(", ")}`);
-    if (!profile) return;
-    await run(() => api.bind(profile, dir));
+
+    if (profiles.length === 1) {
+      await run(() => api.bind(profiles[0].name, dir));
+      return;
+    }
+    setAsk({
+      kind: "choose",
+      title: "Which profile should this use?",
+      detail: dir,
+      options: profiles.map((profile) => ({
+        id: profile.name,
+        label: profile.name,
+        hint: profile.account ?? profile.description,
+        color: profile.color,
+      })),
+      onChoose: (name) => {
+        setAsk(null);
+        void run(() => api.bind(name, dir));
+      },
+    });
   }
 
   const pending = plan?.lines.length ?? 0;
@@ -263,9 +287,12 @@ export function App() {
             onBack={() => setSelected(null)}
             onChanged={refresh}
             onError={setError}
+            onAsk={setAsk}
           />
         )}
       </div>
+
+      {ask && <AskSheet ask={ask} onCancel={() => setAsk(null)} />}
 
       <div className="footer">
         {showPlan && plan && pending > 0 && <PlanSheet plan={plan} />}

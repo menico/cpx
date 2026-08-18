@@ -57,7 +57,19 @@ fn lookup() -> Lookup {
     LOOKUP.with(|l| *l.borrow()).unwrap_or(real_keychain_lookup)
 }
 
-/// The Keychain service name for a given `CLAUDE_CONFIG_DIR`: the base
+/// The Keychain service for a config directory, given the home it belongs to.
+///
+/// The default directory (`~/.claude`) stores its token under the bare
+/// service name; only a custom `CLAUDE_CONFIG_DIR` gets a digest suffix.
+/// Deriving a suffix for the default would report it as signed out.
+pub fn keychain_service_for(config_dir: &Path, home: &Path) -> String {
+    if config_dir == home.join(".claude") {
+        return KEYCHAIN_SERVICE_BASE.to_string();
+    }
+    keychain_service(config_dir)
+}
+
+/// The Keychain service name for a custom `CLAUDE_CONFIG_DIR`: the base
 /// service plus the first eight hex characters of the SHA-256 of the path.
 pub fn keychain_service(config_dir: &Path) -> String {
     let digest = crate::state::sha256_bytes(config_dir.as_os_str().as_encoded_bytes());
@@ -127,11 +139,14 @@ fn file_expired(path: &Path) -> Option<bool> {
 }
 
 /// Full credential status for one profile directory.
-pub fn status(profile_dir: &Path) -> CredentialStatus {
+///
+/// `home` is needed to recognise the default config directory, whose token
+/// lives under the unsuffixed Keychain service.
+pub fn status(profile_dir: &Path, home: &Path) -> CredentialStatus {
     let (account, organization) = account_from_claude_json(profile_dir);
 
     if keychain_has_entry(
-        &keychain_service(profile_dir),
+        &keychain_service_for(profile_dir, home),
         &keychain_account(None),
     ) {
         return CredentialStatus {

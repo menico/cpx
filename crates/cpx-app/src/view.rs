@@ -146,7 +146,7 @@ pub fn action_verb(action: &cpx_core::plan::Action) -> &'static str {
 pub fn profile_row(config: &Config, layout: &Layout, name: &str) -> ProfileRow {
     let profile = &config.profiles[name];
     let dir = config.config_dir(layout, name);
-    let status = credentials::status(&dir);
+    let status = credentials::status(&dir, &layout.home);
 
     ProfileRow {
         name: name.to_string(),
@@ -195,7 +195,7 @@ pub fn profile_detail(config: &Config, layout: &Layout, name: &str) -> ProfileDe
                 has_patch: spec.patch.is_some(),
             })
             .collect(),
-        keychain_service: credentials::keychain_service(&dir),
+        keychain_service: credentials::keychain_service_for(&dir, &layout.home),
     }
 }
 

@@ -298,7 +298,7 @@ fn cmd_list(as_json: bool) -> Result<()> {
 
     for (name, profile) in &session.config.profiles {
         let dir = session.config.config_dir(&session.layout, name);
-        let status = credentials::status(&dir);
+        let status = credentials::status(&dir, &session.layout.home);
         rows.push(json!({
             "name": name,
             "description": profile.description,
@@ -348,7 +348,7 @@ fn cmd_show(name: &str, as_json: bool) -> Result<()> {
         .get(name)
         .with_context(|| format!("no profile named `{name}`"))?;
     let dir = session.config.config_dir(&session.layout, name);
-    let status = credentials::status(&dir);
+    let status = credentials::status(&dir, &session.layout.home);
 
     let resources: Vec<_> = profile
         .resources
@@ -374,7 +374,7 @@ fn cmd_show(name: &str, as_json: bool) -> Result<()> {
                 "env": profile.env,
                 "resources": resources,
                 "credentials": status,
-                "keychainService": credentials::keychain_service(&dir),
+                "keychainService": credentials::keychain_service_for(&dir, &session.layout.home),
             }))?
         );
         return Ok(());
@@ -622,7 +622,7 @@ fn cmd_adopt(dir: Option<PathBuf>, name: Option<&str>, as_json: bool) -> Result<
     println!("Left exactly as it is: {}", adoption.found.join(", "));
 
     // The login is keyed to the directory path, which has not moved.
-    let status = cpx_core::credentials::status(&adoption.dir);
+    let status = cpx_core::credentials::status(&adoption.dir, &session.layout.home);
     match (status.authenticated, status.account.as_deref()) {
         (true, Some(account)) => println!("Still signed in as {account} — no need to log in again."),
         (true, None) => println!("Still signed in — no need to log in again."),

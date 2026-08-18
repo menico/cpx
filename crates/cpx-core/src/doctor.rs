@@ -173,7 +173,7 @@ fn check_profiles(config: &Config, layout: &Layout, checks: &mut Vec<Check>) {
             ));
         }
 
-        let status = crate::credentials::status(&dir);
+        let status = crate::credentials::status(&dir, &layout.home);
         if status.authenticated {
             let who = status.account.unwrap_or_else(|| "signed in".to_string());
             checks.push(ok(format!("profile {name} login"), who));
