@@ -152,6 +152,7 @@ rm -rf "$TAP"
 say "Released $TAG"
 echo
 echo "  brew tap menico/tap"
+echo "  brew trust menico/tap"
 echo "  brew install cpx          # the command"
 echo "  brew install --cask cpx-app   # the menu-bar app"
 echo

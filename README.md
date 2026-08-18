@@ -12,19 +12,21 @@ sync across machines is deliberately not included.
 
 ```bash
 brew tap menico/tap
-brew install cpx           # the command
+brew trust menico/tap        # Homebrew requires this for any third-party tap
+brew install cpx             # the command
 brew install --cask cpx-app  # the menu-bar app
 ```
 
-Homebrew asks you to trust a third-party cask the first time:
-`brew trust menico/tap`.
+Without the `brew trust` line, Homebrew refuses with *"Refusing to load formula
+menico/tap/cpx from untrusted tap"*. It is asked once per machine and covers
+both the formula and the cask.
 
 Updating:
 
 ```bash
 brew update
-brew upgrade cpx           # the command
-brew upgrade --cask cpx-app
+brew upgrade cpx             # the command
+brew upgrade --cask cpx-app  # the app
 ```
 
 The app lives in the menu bar, not the Dock. To start it at login, add it
