@@ -143,15 +143,16 @@ fn status_reports_the_account_alongside_the_source() {
 
 #[test]
 fn service_names_match_claude_codes_own_keychain_entries() {
-    // Verified against live Keychain entries: the services
-    // `Claude Code-credentials-{37c92b8a,a81467e4,ea75f7c9}` present on a
-    // machine using these config directories. If Claude Code ever changes
-    // how it derives the service name, this is where it shows up: profiles
-    // would silently stop finding their own logins.
+    // The derivation was verified against live Keychain entries on a machine
+    // running several profiles: every `Claude Code-credentials-<suffix>` it
+    // held matched the digest of the config directory using it. These pinned
+    // values keep that result as a regression test. If Claude Code ever
+    // changes how it derives the service name, this is where it shows up —
+    // profiles would silently stop finding their own logins.
     for (dir, expected) in [
-        ("/Users/menikoppenhol/.claude-personal", "37c92b8a"),
-        ("/Users/menikoppenhol/.claude-hd", "a81467e4"),
-        ("/Users/menikoppenhol/.claude-ol", "ea75f7c9"),
+        ("/Users/example/.claude-work", "dd1118a7"),
+        ("/Users/example/.claude-personal", "5034c31c"),
+        ("/Users/example/.claude-client", "daabbf05"),
     ] {
         assert_eq!(
             keychain_service(Path::new(dir)),
@@ -164,11 +165,11 @@ fn service_names_match_claude_codes_own_keychain_entries() {
 #[test]
 fn the_default_config_directory_uses_the_unsuffixed_service() {
     // Claude Code stores the default session under the bare service name.
-    // Verified on a real machine: `Claude Code-credentials` exists, while
-    // `Claude Code-credentials-010ed29c` — the digest of ~/.claude — does
-    // not. Deriving a suffix here would report the default session, which is
-    // usually the busiest account, as signed out.
-    let home = Path::new("/Users/menikoppenhol");
+    // Verified on a real machine: the bare `Claude Code-credentials` existed
+    // while the digest of that machine's ~/.claude did not. Deriving a suffix
+    // here would report the default session — usually the busiest account —
+    // as signed out.
+    let home = Path::new("/Users/example");
     assert_eq!(
         keychain_service_for(&home.join(".claude"), home),
         KEYCHAIN_SERVICE_BASE
@@ -177,16 +178,16 @@ fn the_default_config_directory_uses_the_unsuffixed_service() {
 
 #[test]
 fn any_other_directory_still_gets_a_digest_suffix() {
-    let home = Path::new("/Users/menikoppenhol");
+    let home = Path::new("/Users/example");
     assert_eq!(
-        keychain_service_for(&home.join(".claude-hd"), home),
-        format!("{KEYCHAIN_SERVICE_BASE}-a81467e4")
+        keychain_service_for(&home.join(".claude-work"), home),
+        format!("{KEYCHAIN_SERVICE_BASE}-dd1118a7")
     );
 }
 
 #[test]
 fn a_directory_merely_named_claude_elsewhere_is_not_the_default() {
-    let home = Path::new("/Users/menikoppenhol");
+    let home = Path::new("/Users/example");
     let elsewhere = Path::new("/opt/.claude");
     assert_ne!(
         keychain_service_for(elsewhere, home),

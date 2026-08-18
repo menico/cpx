@@ -16,6 +16,7 @@ help:
 	@echo "make app        build cpx.app (unsigned; ad-hoc signed for local use)"
 	@echo "make install    install the command to $(PREFIX)/bin and the app to $(APPS)"
 	@echo "make dev        run the app against a live UI, for development"
+	@echo "make release VERSION=x.y.z   build, publish, update the tap"
 	@echo "make clean      remove build output"
 
 node_modules: ui/package.json
@@ -64,6 +65,16 @@ dev: node_modules
 	  trap 'kill %1 2>/dev/null' EXIT; \
 	  sleep 2; \
 	  cd crates/cpx-app && ../../$(TAURI) dev
+
+.PHONY: release
+release:
+	@test -n "$(VERSION)" || { echo "usage: make release VERSION=0.2.0"; exit 1; }
+	scripts/release.sh "$(VERSION)"
+
+.PHONY: release-dry
+release-dry:
+	@test -n "$(VERSION)" || { echo "usage: make release-dry VERSION=0.2.0"; exit 1; }
+	scripts/release.sh "$(VERSION)" --dry-run
 
 .PHONY: clean
 clean:

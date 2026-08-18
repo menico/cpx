@@ -38,12 +38,14 @@ const DEFAULT_SESSION: DefaultSession = {
 
 const ADOPTABLE: AdoptionRow[] = [
   {
-    name: "ol",
-    dir: "/Users/you/.claude-ol",
+    // Not among the profiles below, so it is offered.
+    name: "archive",
+    dir: "/Users/you/.claude-archive",
     keeps: ["plugins", "projects", "settings.json"],
     taken: false,
   },
   {
+    // Already a profile, so the interface hides it.
     name: "personal",
     dir: "/Users/you/.claude-personal",
     keeps: ["plugins", "projects", "settings.json"],
@@ -53,16 +55,16 @@ const ADOPTABLE: AdoptionRow[] = [
 
 const PROFILES: ProfileRow[] = [
   {
-    name: "hd",
+    name: "work",
     adopted: true,
-    description: "HonestDig work account",
+    description: "Company work account",
     color: "#5c8dff",
-    command: "claude-hd",
+    command: "claude-work",
     model: "sonnet",
-    directory: "/Users/you/.claude-profiles/hd",
+    directory: "/Users/you/.claude-profiles/work",
     applied: true,
     signedIn: true,
-    account: "meni@honestdig.io",
+    account: "you@company.com",
     credentialSource: "keychain",
   },
   {
@@ -79,13 +81,13 @@ const PROFILES: ProfileRow[] = [
     credentialSource: "keychain",
   },
   {
-    name: "ol",
+    name: "client",
     adopted: false,
-    description: "Client: OL",
+    description: "Client work",
     color: "#d69552",
-    command: "claude-ol",
+    command: "claude-client",
     model: "opus",
-    directory: "/Users/you/.claude-profiles/ol",
+    directory: "/Users/you/.claude-profiles/client",
     applied: true,
     signedIn: false,
     account: null,
@@ -120,8 +122,8 @@ const PLAN: PlanView = {
 };
 
 const BINDINGS: BindingRow[] = [
-  { path: "/Users/you/Work/honestdig/platform", profile: "hd", color: "#5c8dff", health: "healthy", healthy: true },
-  { path: "/Users/you/Work/ol/api", profile: "ol", color: "#d69552", health: "notAllowed", healthy: false },
+  { path: "/Users/you/Work/company/platform", profile: "work", color: "#5c8dff", health: "healthy", healthy: true },
+  { path: "/Users/you/Work/client/api", profile: "client", color: "#d69552", health: "notAllowed", healthy: false },
   { path: "/Users/you/side/notes", profile: "personal", color: "#5dc794", health: "blockEdited", healthy: false },
 ];
 
@@ -153,14 +155,14 @@ function detail(name: string): ProfileDetail {
   const row = PROFILES.find((p) => p.name === name) ?? PROFILES[0];
   return {
     row,
-    addDirs: name === "hd" ? ["/Users/you/Work/honestdig"] : [],
+    addDirs: name === "work" ? ["/Users/you/Work/company"] : [],
     env: name === "vertex" ? [["CLAUDE_CODE_USE_VERTEX", "1"], ["CLOUD_ML_REGION", "europe-west1"]] : [],
     resources: RESOURCES.map((r) => ({
       resource: r.resource,
       mode: r.mode,
       isDirectory: r.dir,
       supportsMerge: r.json,
-      hasPatch: r.resource === "settings" && name === "hd",
+      hasPatch: r.resource === "settings" && name === "work",
     })),
     keychainService: "Claude Code-credentials-a81467e4",
   };
