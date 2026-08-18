@@ -4,7 +4,7 @@ Run several Claude Code accounts on one machine. Each profile gets its own
 config directory, its own login, its own command, and can be bound to a
 directory so the right account is used automatically.
 
-**Status: Phase 1 (core library + CLI).** The desktop app, statusline
+**Status: Phase 1 (core + CLI) and Phase 2 (menu-bar app).** The statusline
 builder, per-profile MCP servers, and cloud sync are later phases — see
 `docs/superpowers/specs/`.
 
@@ -164,12 +164,37 @@ overrides whichever profile you think you are using.
 - Wrappers exec Claude by absolute path, so a wrapper directory earlier on
   `PATH` than the real binary cannot cause recursion.
 
+## The menu-bar app
+
+```bash
+pnpm --dir ui install
+pnpm --dir ui tauri dev      # or `tauri build` for a bundled .app
+```
+
+It lives in the menu bar: click the icon for a popover listing every profile,
+which account it is signed into, and whether it is built. Each profile carries
+an identity colour, and that colour is the through-line — it marks the profile
+in the list and every directory bound to it, so colour always answers "which
+account".
+
+Pending changes never apply silently. The footer shows a count; expanding it
+shows the real plan, with the same three-state gutter the CLI prints, so the
+app and the terminal never describe a change differently.
+
+The app is a second consumer of `cpx-core`, not a reimplementation: it makes
+no decision the CLI does not.
+
 ## Development
 
 ```bash
-cargo test      # 232 tests
+cargo test                   # 252 tests
 cargo clippy --all-targets
+pnpm --dir ui tsc --noEmit
 ```
+
+Opening `ui` in a plain browser (`pnpm --dir ui dev`) runs the interface
+against fixtures, so the frontend can be built and reviewed without launching
+the desktop shell.
 
 `cpx-core` holds every decision and knows nothing about terminals;
 `cpx-cli` is argument parsing and rendering. The desktop app will be a second

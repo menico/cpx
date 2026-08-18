@@ -116,3 +116,79 @@ fn an_invalid_profile_name_is_refused_rather_than_written() {
     assert!(add_profile(WITH_COMMENTS, "a/b", "bad").is_err());
     assert!(clone_profile(WITH_COMMENTS, "work", "..").is_err());
 }
+
+// --- resource and field editing (used by the desktop app) ---
+
+#[test]
+fn setting_a_resource_mode_records_it_for_that_profile_only() {
+    let text = add_profile(WITH_COMMENTS, "personal", "Mine").unwrap();
+    let out = set_resource_mode(&text, "work", "projects", "link").unwrap();
+    let cfg = parse(&out);
+    assert_eq!(
+        cfg.profiles["work"].resources[&cpx_core::config::ResourceKey::Projects].mode,
+        cpx_core::config::ResourceMode::Link
+    );
+    assert_eq!(
+        cfg.profiles["personal"].resources[&cpx_core::config::ResourceKey::Projects].mode,
+        cpx_core::config::ResourceMode::Own,
+        "other profiles keep the default"
+    );
+}
+
+#[test]
+fn setting_a_resource_mode_twice_does_not_duplicate_the_key() {
+    let once = set_resource_mode(WITH_COMMENTS, "work", "projects", "link").unwrap();
+    let twice = set_resource_mode(&once, "work", "projects", "copy").unwrap();
+    assert_eq!(twice.matches("projects").count(), 1, "{twice}");
+    assert_eq!(
+        parse(&twice).profiles["work"].resources[&cpx_core::config::ResourceKey::Projects].mode,
+        cpx_core::config::ResourceMode::Copy
+    );
+}
+
+#[test]
+fn setting_a_resource_mode_preserves_comments() {
+    let out = set_resource_mode(WITH_COMMENTS, "work", "projects", "link").unwrap();
+    assert!(out.contains("# my settings"), "{out}");
+}
+
+#[test]
+fn an_impossible_resource_mode_is_refused_and_nothing_is_returned() {
+    // merge only applies to JSON files; commands is a directory.
+    assert!(set_resource_mode(WITH_COMMENTS, "work", "commands", "merge").is_err());
+    assert!(set_resource_mode(WITH_COMMENTS, "work", "settingz", "copy").is_err());
+    assert!(set_resource_mode(WITH_COMMENTS, "work", "projects", "symlink").is_err());
+}
+
+#[test]
+fn setting_a_resource_mode_on_an_unknown_profile_is_refused() {
+    assert!(matches!(
+        set_resource_mode(WITH_COMMENTS, "nope", "projects", "link"),
+        Err(EditError::UnknownProfile(_))
+    ));
+}
+
+#[test]
+fn a_profile_field_can_be_set_and_cleared() {
+    let set = set_profile_field(WITH_COMMENTS, "work", "model", Some("opus")).unwrap();
+    assert_eq!(parse(&set).profiles["work"].model.as_deref(), Some("opus"));
+
+    let cleared = set_profile_field(&set, "work", "model", None).unwrap();
+    assert_eq!(parse(&cleared).profiles["work"].model, None);
+}
+
+#[test]
+fn setting_the_description_replaces_it_rather_than_appending() {
+    let out = set_profile_field(WITH_COMMENTS, "work", "description", Some("New name")).unwrap();
+    let cfg = parse(&out);
+    assert_eq!(cfg.profiles["work"].description, "New name");
+    assert_eq!(out.matches("description").count(), 1, "{out}");
+}
+
+#[test]
+fn an_unwritable_profile_field_is_refused() {
+    // Only fields the app is meant to edit are writable; `resources` is a
+    // table with its own validation and must not be set as a string.
+    assert!(set_profile_field(WITH_COMMENTS, "work", "resources", Some("x")).is_err());
+    assert!(set_profile_field(WITH_COMMENTS, "work", "nonsense", Some("x")).is_err());
+}

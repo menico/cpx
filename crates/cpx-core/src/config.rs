@@ -42,6 +42,10 @@ pub struct ResourceSpec {
 #[derive(Debug, Clone)]
 pub struct Profile {
     pub description: String,
+    /// A `#rrggbb` identity colour. Profiles are told apart at a glance by
+    /// colour in the app and in a statusline, so it is part of the config
+    /// rather than app-local preference.
+    pub color: Option<String>,
     pub model: Option<String>,
     pub add_dirs: Vec<PathBuf>,
     pub env: BTreeMap<String, String>,
@@ -208,6 +212,22 @@ fn validate_profile_name(name: &str) -> Result<(), ConfigError> {
     Ok(())
 }
 
+/// Colours are written into generated files, so only a plain `#rrggbb` is
+/// accepted — never an arbitrary string.
+fn validate_color(profile: &str, raw: &str) -> Result<String, ConfigError> {
+    let valid = raw.len() == 7
+        && raw.starts_with('#')
+        && raw[1..].chars().all(|c| c.is_ascii_hexdigit());
+    if valid {
+        Ok(raw.to_ascii_lowercase())
+    } else {
+        Err(ConfigError::InvalidColor {
+            profile: profile.to_string(),
+            color: raw.to_string(),
+        })
+    }
+}
+
 #[derive(serde::Deserialize)]
 #[serde(untagged)]
 enum RawResource {
@@ -228,6 +248,7 @@ struct RawDefaults {
 struct RawProfile {
     #[serde(default)]
     description: String,
+    color: Option<String>,
     model: Option<String>,
     #[serde(default)]
     add_dirs: Vec<String>,
@@ -323,6 +344,10 @@ impl Config {
                 name.clone(),
                 Profile {
                     description: raw_profile.description.clone(),
+                    color: match &raw_profile.color {
+                        Some(color) => Some(validate_color(name, color)?),
+                        None => None,
+                    },
                     model: raw_profile.model.clone(),
                     add_dirs: raw_profile
                         .add_dirs
@@ -590,6 +615,38 @@ env = { ANTHROPIC_LOG = "debug" }
     fn every_resource_key_round_trips_through_its_config_name() {
         for key in ResourceKey::ALL {
             assert_eq!(ResourceKey::parse(key.config_name()), Some(key));
+        }
+    }
+}
+
+#[cfg(test)]
+mod color_tests {
+    use super::*;
+
+    fn parse(text: &str) -> Result<Config, ConfigError> {
+        Config::parse(text, Path::new("/Users/tester"))
+    }
+
+    #[test]
+    fn a_profile_colour_is_parsed_and_normalised() {
+        let cfg = parse("version = 1\n[profiles.work]\ncolor = \"#5C8DFF\"\n").unwrap();
+        assert_eq!(cfg.profiles["work"].color.as_deref(), Some("#5c8dff"));
+    }
+
+    #[test]
+    fn a_profile_without_a_colour_has_none() {
+        let cfg = parse("version = 1\n[profiles.work]\n").unwrap();
+        assert_eq!(cfg.profiles["work"].color, None);
+    }
+
+    #[test]
+    fn a_colour_that_is_not_a_hex_triplet_is_refused() {
+        for bad in ["red", "#abc", "#12345g", "5c8dff", "#5c8dff;"] {
+            let text = format!("version = 1\n[profiles.work]\ncolor = \"{bad}\"\n");
+            assert!(
+                matches!(parse(&text), Err(ConfigError::InvalidColor { .. })),
+                "accepted {bad:?}"
+            );
         }
     }
 }

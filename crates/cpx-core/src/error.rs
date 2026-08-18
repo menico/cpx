@@ -30,6 +30,9 @@ pub enum ConfigError {
     #[error("profile name `{name}` is invalid: {reason}")]
     InvalidProfileName { name: String, reason: String },
 
+    #[error("profile `{profile}` has color `{color}`; expected a #rrggbb value")]
+    InvalidColor { profile: String, color: String },
+
     #[error("no profile named `{0}`")]
     UnknownProfile(String),
 

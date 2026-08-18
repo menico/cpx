@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/cpx-core", "crates/cpx-cli"]
+members = ["crates/cpx-core", "crates/cpx-cli", "crates/cpx-app"]
 resolver = "2"
 
 [workspace.package]

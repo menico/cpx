@@ -20,6 +20,9 @@ pub enum EditError {
     #[error("no profile named `{0}`")]
     UnknownProfile(String),
 
+    #[error("`{0}` is not a field the app may set")]
+    UnwritableField(String),
+
     #[error(transparent)]
     Config(#[from] ConfigError),
 }
@@ -118,4 +121,80 @@ pub fn clone_profile(text: &str, from: &str, to: &str) -> Result<String, EditErr
 
     profiles.insert(to, source);
     Ok(doc.to_string())
+}
+/// Fields the app may write as plain strings. Anything structured has its
+/// own function, so a typo cannot turn a table into a string.
+const WRITABLE_FIELDS: [&str; 3] = ["description", "model", "color"];
+
+/// Re-parse an edited document, so every rule in `Config::parse` — unknown
+/// resource keys, impossible modes, invalid names — applies to edits too.
+fn validated(doc: DocumentMut) -> Result<String, EditError> {
+    let text = doc.to_string();
+    Config::parse(&text, std::path::Path::new("/")).map_err(EditError::Config)?;
+    Ok(text)
+}
+
+fn profile_mut<'a>(doc: &'a mut DocumentMut, name: &str) -> Result<&'a mut Table, EditError> {
+    let profiles = profiles_table(doc);
+    if !profiles.contains_key(name) {
+        return Err(EditError::UnknownProfile(name.to_string()));
+    }
+    profiles
+        .get_mut(name)
+        .and_then(|item| item.as_table_mut())
+        .ok_or_else(|| EditError::UnknownProfile(name.to_string()))
+}
+
+/// Set a resource's mode for one profile.
+pub fn set_resource_mode(
+    text: &str,
+    profile: &str,
+    resource: &str,
+    mode: &str,
+) -> Result<String, EditError> {
+    let mut doc: DocumentMut = text.parse()?;
+    let table = profile_mut(&mut doc, profile)?;
+
+    if !table.contains_key("resources") {
+        let mut resources = Table::new();
+        resources.set_implicit(false);
+        table["resources"] = Item::Table(resources);
+    }
+    let resources = table["resources"]
+        .as_table_mut()
+        .ok_or_else(|| EditError::UnknownProfile(profile.to_string()))?;
+
+    match resources.get(resource).and_then(|i| i.as_table_like()) {
+        // An existing table form carries a patch worth keeping.
+        Some(_) => {
+            resources[resource]["mode"] = toml_edit::value(mode);
+        }
+        None => {
+            resources[resource] = toml_edit::value(mode);
+        }
+    }
+
+    validated(doc)
+}
+
+/// Set or clear a profile's `description` or `model`.
+pub fn set_profile_field(
+    text: &str,
+    profile: &str,
+    field: &str,
+    value: Option<&str>,
+) -> Result<String, EditError> {
+    if !WRITABLE_FIELDS.contains(&field) {
+        return Err(EditError::UnwritableField(field.to_string()));
+    }
+    let mut doc: DocumentMut = text.parse()?;
+    let table = profile_mut(&mut doc, profile)?;
+
+    match value {
+        Some(value) => table[field] = toml_edit::value(value),
+        None => {
+            table.remove(field);
+        }
+    }
+    validated(doc)
 }

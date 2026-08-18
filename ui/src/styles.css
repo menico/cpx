@@ -1,0 +1,482 @@
+/* cpx — a menu-bar utility for telling Claude accounts apart.
+   The chrome is deliberately colourless: the only saturated colour in the
+   interface is a profile's own identity colour, so colour always means
+   "which account". */
+
+:root {
+  --surface: #fbfbfc;
+  --raised: #ffffff;
+  --sunken: #f3f4f6;
+  --line: #e4e6eb;
+  --line-strong: #d3d7de;
+  --ink: #171a1f;
+  --ink-soft: #454b57;
+  --muted: #6c727f;
+  --accent: #3b5bdb;
+  --ok: #067647;
+  --warn: #b45309;
+  --fail: #b42318;
+  --shadow: 0 1px 2px rgb(23 26 31 / 0.06), 0 8px 24px rgb(23 26 31 / 0.08);
+
+  /* Mono is the display face on purpose: a profile name is a shell command,
+     and nearly every value in this app is a path or an environment variable. */
+  --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, monospace;
+  --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+
+  --r: 7px;
+  color-scheme: light dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --surface: #16181d;
+    --raised: #1d2026;
+    --sunken: #12141a;
+    --line: #2a2e37;
+    --line-strong: #3a404b;
+    --ink: #e9ebef;
+    --ink-soft: #c3c8d2;
+    --muted: #9098a6;
+    --accent: #7c93f0;
+    --ok: #4ade80;
+    --warn: #fbbf24;
+    --fail: #f87171;
+    --shadow: 0 1px 2px rgb(0 0 0 / 0.4), 0 8px 24px rgb(0 0 0 / 0.35);
+  }
+}
+
+* { box-sizing: border-box; }
+
+html, body, #root { height: 100%; }
+
+body {
+  margin: 0;
+  background: var(--surface);
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: 13px;
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+  cursor: default;
+  user-select: none;
+}
+
+button { font: inherit; color: inherit; }
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+  border-radius: 4px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+}
+
+/* ---------- shell ---------- */
+
+.app { display: flex; flex-direction: column; height: 100%; }
+
+.titlebar {
+  height: 26px;
+  flex: none;
+  -webkit-app-region: drag;
+}
+
+.tabs {
+  flex: none;
+  display: flex;
+  gap: 2px;
+  padding: 0 10px 10px;
+  border-bottom: 1px solid var(--line);
+}
+
+.tab {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  padding: 5px 9px;
+  border-radius: 6px;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  letter-spacing: 0.01em;
+  color: var(--muted);
+  cursor: default;
+}
+
+.tab:hover { background: var(--sunken); color: var(--ink-soft); }
+
+.tab[aria-selected="true"] {
+  background: var(--sunken);
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.tab .count {
+  margin-left: 5px;
+  font-size: 10px;
+  color: var(--muted);
+}
+
+.tab[aria-selected="true"] .count { color: var(--ink-soft); }
+
+.tab .dot { margin-left: 5px; }
+
+.body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+/* ---------- rows ---------- */
+
+.row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 9px 12px 9px 14px;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  background: transparent;
+  text-align: left;
+  cursor: default;
+}
+
+.row:hover { background: var(--raised); }
+
+/* The identity bar. This is the through-line: the same colour appears on the
+   profile, on every directory bound to it, and in its statusline. */
+.row .bar {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  background: var(--bar, var(--line-strong));
+}
+
+.row .grow { flex: 1; min-width: 0; overflow: hidden; }
+
+.name {
+  display: block;
+  font-family: var(--mono);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sub {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+  margin-top: 1px;
+  color: var(--muted);
+  font-size: 11.5px;
+  /* A command name must never break mid-token: it is something to type. */
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.sub > * { flex: none; }
+.sub > .trunc { flex: 1; min-width: 0; }
+
+.sub .mono { font-family: var(--mono); font-size: 11px; }
+
+.trunc { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.right {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 1px;
+  max-width: 42%;
+  min-width: 0;
+}
+
+.account {
+  display: block;
+  max-width: 100%;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--ink-soft);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.state {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  vertical-align: middle;
+}
+
+.dot.ok { color: var(--ok); }
+.dot.warn { color: var(--warn); }
+.dot.fail { color: var(--fail); }
+.dot.off { color: var(--line-strong); }
+
+/* ---------- footer ---------- */
+
+.footer {
+  flex: none;
+  border-top: 1px solid var(--line);
+  background: var(--raised);
+}
+
+.footer-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+}
+
+.footer-bar .grow { flex: 1; min-width: 0; }
+
+.btn {
+  appearance: none;
+  border: 1px solid var(--line-strong);
+  background: var(--raised);
+  border-radius: var(--r);
+  padding: 5px 10px;
+  font-size: 12px;
+  cursor: default;
+  white-space: nowrap;
+}
+
+.btn:hover:not(:disabled) { background: var(--sunken); }
+.btn:disabled { opacity: 0.45; }
+
+.btn.primary {
+  border-color: transparent;
+  background: var(--accent);
+  color: #fff;
+  font-weight: 550;
+}
+
+.btn.primary:hover:not(:disabled) { filter: brightness(1.08); }
+
+@media (prefers-color-scheme: dark) {
+  .btn.primary { color: #12141a; }
+}
+
+.btn.danger { color: var(--fail); }
+.btn.small { padding: 3px 8px; font-size: 11.5px; }
+
+.btn.quiet {
+  border-color: transparent;
+  background: transparent;
+  color: var(--muted);
+}
+
+.btn.quiet:hover:not(:disabled) { background: var(--sunken); color: var(--ink); }
+
+/* ---------- plan sheet: the signature ---------- */
+
+.plan {
+  max-height: 40vh;
+  overflow-y: auto;
+  border-bottom: 1px solid var(--line);
+  background: var(--sunken);
+  animation: rise 180ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+@keyframes rise {
+  from { max-height: 0; opacity: 0; }
+  to { max-height: 40vh; opacity: 1; }
+}
+
+.plan-line {
+  display: flex;
+  gap: 8px;
+  padding: 3px 12px;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--ink-soft);
+}
+
+/* The same three-state gutter the CLI prints, so the two never disagree. */
+.plan-line .gutter { flex: none; width: 10px; color: var(--muted); }
+.plan-line.generated .gutter { color: var(--warn); }
+.plan-line.foreign .gutter { color: var(--fail); font-weight: 700; }
+.plan-line.foreign { background: color-mix(in srgb, var(--fail) 8%, transparent); }
+
+.plan-line .verb { flex: none; width: 52px; color: var(--muted); }
+.plan-line .path { flex: 1; min-width: 0; word-break: break-all; }
+
+.plan-note {
+  padding: 5px 12px 5px 30px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+/* ---------- detail panel ---------- */
+
+.sheet {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  animation: slide 180ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+@keyframes slide {
+  from { transform: translateX(12px); opacity: 0; }
+  to { transform: none; opacity: 1; }
+}
+
+.sheet-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--line);
+}
+
+.sheet-body { flex: 1; min-height: 0; overflow-y: auto; padding: 4px 0 12px; }
+
+.group { padding: 10px 14px 2px; }
+
+.group > h3 {
+  margin: 0 0 7px;
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.group > h3.literal {
+  text-transform: none;
+  font-size: 13px;
+  letter-spacing: -0.01em;
+  color: var(--ink);
+}
+
+.field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+  min-height: 26px;
+}
+
+.field > label { flex: none; width: 96px; color: var(--muted); font-size: 12px; }
+.field > .value { flex: 1; min-width: 0; font-family: var(--mono); font-size: 11.5px; }
+
+.field .value.wrap { word-break: break-all; user-select: text; }
+
+input[type="text"], select {
+  appearance: none;
+  width: 100%;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  background: var(--raised);
+  color: var(--ink);
+  padding: 4px 7px;
+  font-family: var(--mono);
+  font-size: 11.5px;
+}
+
+select { cursor: default; padding-right: 22px; }
+
+.swatches { display: flex; gap: 5px; flex-wrap: wrap; }
+
+.swatch {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 1px solid rgb(0 0 0 / 0.14);
+  padding: 0;
+  cursor: default;
+}
+
+.swatch[aria-pressed="true"] {
+  box-shadow: 0 0 0 2px var(--surface), 0 0 0 3.5px var(--ink);
+}
+
+.resource {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 0;
+}
+
+.resource .rname {
+  flex: 1;
+  font-family: var(--mono);
+  font-size: 11.5px;
+}
+
+.resource select { flex: none; width: 92px; }
+
+.patch {
+  flex: none;
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--accent);
+}
+
+/* ---------- messages and empty states ---------- */
+
+.empty {
+  padding: 34px 26px;
+  text-align: center;
+  color: var(--muted);
+}
+
+.empty h2 {
+  margin: 0 0 6px;
+  font-family: var(--mono);
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.empty p { margin: 0 0 16px; font-size: 12px; }
+
+.error {
+  margin: 10px 12px;
+  padding: 8px 10px;
+  border-radius: var(--r);
+  border: 1px solid color-mix(in srgb, var(--fail) 40%, var(--line));
+  background: color-mix(in srgb, var(--fail) 8%, transparent);
+  color: var(--ink);
+  font-size: 11.5px;
+  user-select: text;
+}
+
+.check {
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--line);
+  display: flex;
+  gap: 9px;
+}
+
+.check .icon { flex: none; margin-top: 5px; }
+.check .cname { font-family: var(--mono); font-size: 11.5px; font-weight: 600; }
+.check .cdetail { color: var(--ink-soft); font-size: 11.5px; user-select: text; }
+.check .cremedy { margin-top: 3px; color: var(--muted); font-size: 11.5px; }
+.check .cremedy code { font-family: var(--mono); font-size: 11px; color: var(--ink-soft); }
