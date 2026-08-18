@@ -1,6 +1,14 @@
 import { useCallback, useEffect, useState } from "react";
 import { api, message } from "./api";
-import type { BindingRow, CheckView, PlanView, ProfileDetail as Detail, ProfileRow } from "./api";
+import type {
+  AdoptionRow,
+  BindingRow,
+  CheckView,
+  PlanView,
+  ProfileDetail as Detail,
+  ProfileRow,
+} from "./api";
+import { Adoptable } from "./Adoptable";
 import { Bindings } from "./Bindings";
 import { Health } from "./Health";
 import { PlanSheet } from "./PlanSheet";
@@ -13,6 +21,7 @@ export function App() {
   const [profiles, setProfiles] = useState<ProfileRow[]>([]);
   const [bindings, setBindings] = useState<BindingRow[]>([]);
   const [checks, setChecks] = useState<CheckView[]>([]);
+  const [adoptable, setAdoptable] = useState<AdoptionRow[]>([]);
   const [plan, setPlan] = useState<PlanView | null>(null);
   const [tab, setTab] = useState<Tab>("profiles");
   const [selected, setSelected] = useState<Detail | null>(null);
@@ -26,16 +35,18 @@ export function App() {
       setReady(initialised);
       if (!initialised) return;
 
-      const [rows, bound, health, pending] = await Promise.all([
+      const [rows, bound, health, pending, candidates] = await Promise.all([
         api.profiles(),
         api.bindings(),
         api.checks(),
         api.plan(),
+        api.adoptionCandidates(),
       ]);
       setProfiles(rows);
       setBindings(bound);
       setChecks(health);
       setPlan(pending);
+      setAdoptable(candidates);
       setError(null);
 
       // Keep an open detail panel in step with the config it is showing.
@@ -103,6 +114,10 @@ export function App() {
       const colour = SWATCHES.find((c) => !used.has(c)) ?? SWATCHES[0];
       await api.setField(name, "color", colour);
     });
+  }
+
+  async function adoptDirectory(candidate: AdoptionRow) {
+    await run(() => api.adopt(candidate.dir, null));
   }
 
   async function bindDirectory() {
@@ -184,17 +199,18 @@ export function App() {
       <div className="body" style={{ position: "relative" }}>
         {error && <div className="error">{error}</div>}
 
-        {tab === "profiles" &&
-          (profiles.length === 0 ? (
-            <div className="empty">
-              <h2>No profiles yet</h2>
-              <p>A profile is one Claude account, with its own login and its own command.</p>
-              <button className="btn primary" onClick={addProfile}>
-                Add a profile
-              </button>
-            </div>
-          ) : (
-            profiles.map((profile) => (
+        {tab === "profiles" && (
+          <>
+            {profiles.length === 0 && adoptable.every((c) => c.taken) ? (
+              <div className="empty">
+                <h2>No profiles yet</h2>
+                <p>A profile is one Claude account, with its own login and its own command.</p>
+                <button className="btn primary" onClick={addProfile}>
+                  Add a profile
+                </button>
+              </div>
+            ) : (
+              profiles.map((profile) => (
               <button
                 className="row"
                 key={profile.name}
@@ -207,6 +223,7 @@ export function App() {
                   <span className="sub">
                     <span className="mono">{profile.command}</span>
                     {profile.model && <span>· {profile.model}</span>}
+                    {profile.adopted && <span>· in place</span>}
                     {profile.description && <span className="trunc">· {profile.description}</span>}
                   </span>
                 </span>
@@ -223,8 +240,11 @@ export function App() {
                   </span>
                 </span>
               </button>
-            ))
-          ))}
+              ))
+            )}
+            <Adoptable candidates={adoptable} onAdopt={adoptDirectory} />
+          </>
+        )}
 
         {tab === "directories" && (
           <Bindings

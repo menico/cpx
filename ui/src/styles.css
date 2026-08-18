@@ -480,3 +480,30 @@ select { cursor: default; padding-right: 22px; }
 .check .cdetail { color: var(--ink-soft); font-size: 11.5px; user-select: text; }
 .check .cremedy { margin-top: 3px; color: var(--muted); font-size: 11.5px; }
 .check .cremedy code { font-family: var(--mono); font-size: 11px; color: var(--ink-soft); }
+
+/* ---------- adoptable directories ---------- */
+
+.adoptable {
+  margin-top: 6px;
+  border-top: 1px solid var(--line);
+  padding-top: 12px;
+}
+
+.adoptable .hint {
+  margin: -3px 0 8px;
+  color: var(--muted);
+  font-size: 11.5px;
+  line-height: 1.4;
+}
+
+.adopt-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.adopt-row:last-child { border-bottom: 0; }
+.adopt-row .grow { flex: 1; min-width: 0; overflow: hidden; }
+.adopt-row .name { font-size: 12.5px; }

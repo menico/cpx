@@ -37,6 +37,7 @@ Each profile is a directory under `~/.claude-profiles/<name>/` used as
 | `link` | symlink to `~/.claude/<resource>` — edit once, every profile sees it |
 | `copy` | seeded once from source, then yours to diverge (`apply --sync` refreshes) |
 | `own` | profile-private; source is never consulted |
+| `ignore` | cpx does not manage this resource at all |
 | `merge` | regenerated each apply as the source JSON deep-merged with this profile's patch |
 
 `merge` is what lets a profile override part of `settings.json` — a model, a
@@ -96,6 +97,27 @@ Ownership is tracked by content hash in `~/.claude-profiles/state.json`, so a
 file you hand-edit is recognised as yours and protected, and applying twice
 converges to nothing.
 
+## Adopting what you already have
+
+If you already run Claude accounts by hand out of `~/.claude-work`,
+`~/.claude-personal` and so on, cpx manages them where they are:
+
+```bash
+cpx adopt                      # lists what it found, and what each would keep
+cpx adopt ~/.claude-work       # registers it; nothing inside it changes
+cpx apply                      # adds its command, and only that
+```
+
+Adoption is deliberately inert. Every resource the directory already has is
+set to `own` and every one it lacks is set to `ignore`, so `apply` writes the
+wrapper and the shim and touches nothing else — not the plugins, not the
+sessions, not `settings.json`. The shim lives under the cpx root rather than
+inside your directory. Because the path does not move, the Keychain entry
+still matches and the profile stays signed in.
+
+You can then opt any resource into `link` or `merge` deliberately, seeing the
+plan first.
+
 ## Per-directory profiles
 
 `cpx bind <profile>` writes a marker-delimited block into that directory's
@@ -146,6 +168,7 @@ claude-work auth login
 | `cpx which` | which profile applies here |
 | `cpx run <profile> -- <args>` | one-shot under a profile |
 | `cpx clone <from> <to>` | duplicate a profile's config, without credentials |
+| `cpx adopt [dir]` | manage a config directory you already have, in place |
 | `cpx profile add\|rm <name>` | edit the config, preserving comments |
 
 Every read command takes `--json`.
@@ -156,9 +179,9 @@ overrides whichever profile you think you are using.
 
 ## Notes
 
-- **Existing `~/.claude-*` directories cannot be adopted in place.** A login
-  is keyed to its config directory's path, so moving one means signing in
-  again. `cpx init` points out any it finds and leaves them alone.
+- **Existing `~/.claude-*` directories are adopted in place, not moved.** A
+  login is keyed to its config directory's path, so `cpx adopt` manages the
+  directory where it already sits and you never sign in again.
 - **Wrapper name collisions are refused, not resolved.** If
   `~/.local/bin/claude-<name>` exists and cpx did not write it, apply stops.
 - Wrappers exec Claude by absolute path, so a wrapper directory earlier on

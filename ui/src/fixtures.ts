@@ -5,6 +5,7 @@
 // without launching the desktop shell. They are used only when the bridge is
 // absent, so the packaged app never reaches them.
 import type {
+  AdoptionRow,
   ApplyView,
   BindingRow,
   CheckView,
@@ -26,9 +27,25 @@ const RESOURCES: { resource: string; mode: ResourceMode; dir: boolean; json: boo
   { resource: "projects", mode: "own", dir: true, json: false },
 ];
 
+const ADOPTABLE: AdoptionRow[] = [
+  {
+    name: "ol",
+    dir: "/Users/you/.claude-ol",
+    keeps: ["plugins", "projects", "settings.json"],
+    taken: false,
+  },
+  {
+    name: "personal",
+    dir: "/Users/you/.claude-personal",
+    keeps: ["plugins", "projects", "settings.json"],
+    taken: true,
+  },
+];
+
 const PROFILES: ProfileRow[] = [
   {
     name: "hd",
+    adopted: true,
     description: "HonestDig work account",
     color: "#5c8dff",
     command: "claude-hd",
@@ -41,6 +58,7 @@ const PROFILES: ProfileRow[] = [
   },
   {
     name: "personal",
+    adopted: false,
     description: "Personal subscription",
     color: "#5dc794",
     command: "claude-personal",
@@ -53,6 +71,7 @@ const PROFILES: ProfileRow[] = [
   },
   {
     name: "ol",
+    adopted: false,
     description: "Client: OL",
     color: "#d69552",
     command: "claude-ol",
@@ -65,6 +84,7 @@ const PROFILES: ProfileRow[] = [
   },
   {
     name: "vertex",
+    adopted: false,
     description: "Company via Vertex AI",
     color: "#c96ec9",
     command: "claude-vertex",
@@ -155,6 +175,8 @@ export const fixtures = {
   cloneProfile: unsupported,
   setField: () => Promise.resolve(),
   setResource: () => Promise.resolve(),
+  adoptionCandidates: () => Promise.resolve(ADOPTABLE),
+  adopt: unsupported,
   configPath: () => Promise.resolve("/Users/you/.claude-profiles/config.toml"),
   auth: unsupported,
   reveal: () => Promise.resolve(),

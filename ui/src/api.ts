@@ -7,6 +7,8 @@ export type CredentialSource = "keychain" | "file" | "none";
 
 export interface ProfileRow {
   name: string;
+  /** Managed in place, in a directory that existed before cpx did. */
+  adopted: boolean;
   description: string;
   color: string | null;
   command: string;
@@ -76,6 +78,15 @@ export interface CheckView {
   remedy: string | null;
 }
 
+export interface AdoptionRow {
+  name: string;
+  dir: string;
+  /** What the directory already holds, and keeps untouched. */
+  keeps: string[];
+  /** A profile of this name is already configured. */
+  taken: boolean;
+}
+
 export interface ApplyView {
   performed: number;
   backups: [string, string][];
@@ -104,6 +115,8 @@ const real = {
     invoke<void>("set_field", { profile, field, value }),
   setResource: (profile: string, resource: string, mode: ResourceMode) =>
     invoke<void>("set_resource", { profile, resource, mode }),
+  adoptionCandidates: () => invoke<AdoptionRow[]>("adoption_candidates"),
+  adopt: (dir: string, name: string | null) => invoke<void>("adopt", { dir, name }),
   configPath: () => invoke<string>("config_path"),
   auth: (profile: string, action: "login" | "logout" | "status") =>
     invoke<void>("auth", { profile, action }),
