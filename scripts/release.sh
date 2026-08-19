@@ -39,13 +39,27 @@ for target in aarch64-apple-darwin x86_64-apple-darwin; do
   tar -czf "$DIST/cpx-$VERSION-$target.tar.gz" -C "target/$target/release" cpx
 done
 
-# A dmg build that fails part-way leaves its scratch volume mounted, and the
-# next build then fails on the name. Clear any before starting.
-for volume in /Volumes/dmg.*; do
-  [[ -d "$volume" ]] || continue
-  echo "detaching stale $volume"
-  hdiutil detach "$volume" -force >/dev/null 2>&1 || true
-done
+# A dmg build that fails part-way leaves a scratch image attached and its
+# volume mounted, and the next build then fails on the name. Detach anything
+# left over from an earlier build of this project, and remove the scratch
+# images themselves — matching on the image path so nothing else is touched.
+cleanup_stale_dmg() {
+  local disk
+  while read -r disk; do
+    [[ -n "$disk" ]] || continue
+    echo "detaching stale $disk"
+    hdiutil detach "$disk" -force >/dev/null 2>&1 || true
+  done < <(hdiutil info 2>/dev/null | awk -v root="$ROOT" '
+    /^image-path/ { path = $0 }
+    /^\/dev\/disk/ { if (index(path, root) > 0) print $1 }
+  ' | sort -u)
+
+  rm -f "$ROOT"/target/*/release/bundle/macos/rw.*.dmg \
+        "$ROOT"/target/release/bundle/macos/rw.*.dmg 2>/dev/null || true
+}
+cleanup_stale_dmg
+# And again on the way out, so a failure here does not poison the next run.
+trap cleanup_stale_dmg EXIT
 
 say "Building the app as a universal binary"
 (cd ui && ./node_modules/.bin/vite build)

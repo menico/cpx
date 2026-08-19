@@ -8,6 +8,7 @@ import type {
   AdoptionRow,
   DefaultSession,
   Statusline,
+  StatuslineScript,
   ApplyView,
   BindingRow,
   CheckView,
@@ -34,6 +35,23 @@ const STATUSLINE: Statusline = {
   delegate: "node ~/.claude/statusline.mjs",
   script: "/Users/you/.claude-profiles/work/statusline.sh",
   needsApply: true,
+};
+
+const SCRIPT: StatuslineScript = {
+  path: "/Users/you/.claude/statusline.mjs",
+  contents:
+    "#!/usr/bin/env node\n" +
+    "// Install with `npx github:someone/fold-statusline`\n" +
+    "\n" +
+    "let raw = \"\";\n" +
+    "process.stdin.on(\"data\", (c) => (raw += c));\n" +
+    "process.stdin.on(\"end\", () => {\n" +
+    "  const data = JSON.parse(raw || \"{}\");\n" +
+    "  const pct = Math.round((data.context_window?.used ?? 0) / 2000);\n" +
+    "  process.stdout.write(`ctx ${pct}% | ${data.model?.id ?? \"claude\"}`);\n" +
+    "});\n",
+  owned: false,
+  managedBy: "Install with `npx github:someone/fold-statusline`",
 };
 
 const DEFAULT_SESSION: DefaultSession = {
@@ -198,6 +216,9 @@ export const fixtures = {
   statusline: () => Promise.resolve(STATUSLINE),
   setStatusline: () => Promise.resolve(),
   clearStatusline: () => Promise.resolve(),
+  statuslineScript: () => Promise.resolve(SCRIPT),
+  saveStatuslineScript: () => Promise.resolve(),
+  forkStatuslineScript: () => Promise.resolve("/Users/you/.claude-profiles/work/custom-statusline.mjs"),
   adoptionCandidates: () => Promise.resolve(ADOPTABLE),
   adopt: unsupported,
   configPath: () => Promise.resolve("/Users/you/.claude-profiles/config.toml"),

@@ -1,4 +1,6 @@
 import type { DefaultSession as Session } from "./api";
+import { useState } from "react";
+import { ScriptEditor } from "./ScriptEditor";
 import { StatuslineControl } from "./StatuslineControl";
 
 /** The directory a plain `claude` uses.
@@ -13,8 +15,13 @@ interface Props {
 }
 
 export function DefaultSession({ session, onChanged, onError }: Props) {
+  const [editing, setEditing] = useState(false);
+
   // Already listed as a profile of its own.
   if (session.claimedBy) return null;
+  if (editing) {
+    return <ScriptEditor profile={null} onClose={() => setEditing(false)} onError={onError} />;
+  }
 
   return (
     <div className="group unmanaged">
@@ -43,7 +50,13 @@ export function DefaultSession({ session, onChanged, onError }: Props) {
       </div>
       {/* The badge here reads whichever profile is running, so a profile that
           inherits these settings still shows its own name. */}
-      <StatuslineControl profile={null} label="profile" onChanged={onChanged} onError={onError} />
+      <StatuslineControl
+        profile={null}
+        label="profile"
+        onChanged={onChanged}
+        onError={onError}
+        onEdit={() => setEditing(true)}
+      />
     </div>
   );
 }

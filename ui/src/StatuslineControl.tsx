@@ -9,12 +9,14 @@ interface Props {
   label: string;
   onChanged: () => void;
   onError: (message: string) => void;
+  /** Open the editor for the script this statusline runs. */
+  onEdit: () => void;
 }
 
 /** Turns a profile badge on or off in front of the statusline already
  *  configured. The existing statusline script is never edited: the badge runs
  *  first and then hands the session straight to it. */
-export function StatuslineControl({ profile, label, onChanged, onError }: Props) {
+export function StatuslineControl({ profile, label, onChanged, onError, onEdit }: Props) {
   const [state, setState] = useState<Statusline | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -69,6 +71,11 @@ export function StatuslineControl({ profile, label, onChanged, onError }: Props)
       <div className="field">
         <label>{state.badge ? "In front of" : "Statusline"}</label>
         <div className="value wrap">{state.delegate ?? "none configured"}</div>
+        {state.delegate && (
+          <button className="btn small" onClick={onEdit}>
+            Edit…
+          </button>
+        )}
       </div>
 
       {state.badge && state.needsApply && (

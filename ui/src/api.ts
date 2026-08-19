@@ -88,6 +88,15 @@ export interface Statusline {
   needsApply: boolean;
 }
 
+export interface StatuslineScript {
+  path: string;
+  contents: string;
+  /** cpx's own copy, so edits are safe from installers. */
+  owned: boolean;
+  /** Set when something else will overwrite this file later. */
+  managedBy: string | null;
+}
+
 export interface DefaultSession {
   dir: string;
   account: string | null;
@@ -140,6 +149,12 @@ const real = {
   setStatusline: (profile: string | null, label: string | null, refresh: number | null) =>
     invoke<void>("set_statusline", { profile, label, refresh }),
   clearStatusline: (profile: string | null) => invoke<void>("clear_statusline", { profile }),
+  statuslineScript: (profile: string | null) =>
+    invoke<StatuslineScript | null>("statusline_script", { profile }),
+  saveStatuslineScript: (profile: string | null, contents: string) =>
+    invoke<void>("save_statusline_script", { profile, contents }),
+  forkStatuslineScript: (profile: string | null) =>
+    invoke<string>("fork_statusline_script", { profile }),
   adoptionCandidates: () => invoke<AdoptionRow[]>("adoption_candidates"),
   adopt: (dir: string, name: string | null) => invoke<void>("adopt", { dir, name }),
   configPath: () => invoke<string>("config_path"),

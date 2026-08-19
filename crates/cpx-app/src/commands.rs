@@ -22,6 +22,11 @@ fn install() -> Answer<Install> {
     Install::from_env().map_err(err)
 }
 
+/// Reload after a config write, so the next step sees the new state.
+fn install_fresh() -> Answer<Install> {
+    Install::from_env().map_err(err)
+}
+
 #[tauri::command]
 pub fn is_initialised() -> bool {
     layout_from_env()
@@ -258,6 +263,80 @@ pub fn clear_statusline(profile: Option<String>) -> Answer<()> {
         install.write_config(&config_text).map_err(err)?;
     }
     Ok(())
+}
+
+/// The script behind a target's statusline, for editing.
+#[tauri::command]
+pub fn statusline_script(profile: Option<String>) -> Answer<Option<ScriptView>> {
+    let install = install()?;
+    let target = statusline_target(profile);
+    let found = cpx_core::statusline::script_of(&install.config, &install.layout, &target)
+        .map_err(err)?;
+    Ok(found.map(|script| ScriptView {
+        path: script.path.display().to_string(),
+        contents: script.contents,
+        owned: script.owned,
+        managed_by: script.managed_by,
+    }))
+}
+
+/// Save an edited statusline script.
+///
+/// The path is resolved here rather than taken from the caller, so this can
+/// only ever write the file that target's statusline actually runs.
+#[tauri::command]
+pub fn save_statusline_script(profile: Option<String>, contents: String) -> Answer<()> {
+    let install = install()?;
+    let target = statusline_target(profile);
+    let script = cpx_core::statusline::script_of(&install.config, &install.layout, &target)
+        .map_err(err)?
+        .ok_or("there is no script behind this statusline to edit")?;
+    cpx_core::statusline::save_script(&script.path, &contents).map_err(err)?;
+    Ok(())
+}
+
+/// Copy a shared script into this profile's own space and run the copy.
+#[tauri::command]
+pub fn fork_statusline_script(profile: Option<String>) -> Answer<String> {
+    let install = install()?;
+    let target = statusline_target(profile.clone());
+
+    let plan = cpx_core::statusline::plan_install(&install.config, &install.layout, &target, None)
+        .map_err(err)?;
+    let had_badge = plan.replacing;
+
+    let fork = cpx_core::statusline::fork_script(&install.config, &install.layout, &target)
+        .map_err(err)?
+        .ok_or("this script is already yours to edit")?;
+
+    // Take the badge off first so the delegate it records is rewritten, then
+    // point the statusline at the copy, then put the badge back in front.
+    let mut text = install.config_text().map_err(err)?;
+    if had_badge {
+        let applied = cpx_core::statusline::remove(&plan, &text).map_err(err)?;
+        if let Some(updated) = applied.config_text {
+            install.write_config(&updated).map_err(err)?;
+            text = updated;
+        }
+    }
+
+    let install = install_fresh()?;
+    let applied = cpx_core::statusline::set_command(
+        &install.config,
+        &install.layout,
+        &target,
+        &fork.command,
+        &text,
+    )
+    .map_err(err)?;
+    if let Some(updated) = applied.config_text {
+        install.write_config(&updated).map_err(err)?;
+    }
+
+    if had_badge {
+        set_statusline(profile, None, None)?;
+    }
+    Ok(fork.path.display().to_string())
 }
 
 /// The directory a plain `claude` uses. Reported, never managed.

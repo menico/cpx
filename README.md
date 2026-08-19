@@ -183,6 +183,19 @@ For a profile whose settings are `merge`d, the badge is recorded as a patch in
 `config.toml` and applied on the next `cpx apply`; otherwise the profile's own
 `settings.json` is edited, and the previous file is kept alongside it.
 
+### Editing the script
+
+The app opens the script a profile's statusline actually runs, resolved from
+the configured command, and saves it with the previous contents kept
+alongside. Where that file belongs to an installer — a `statusline.mjs` put
+there by `npx`, say — it offers to copy it into the profile first, because
+editing the original would be undone on its next update. The copy lives under
+the cpx root and the profile is repointed at it.
+
+There is nothing to open when the statusline is a command with no file behind
+it, such as `npx something` or a binary on `PATH`; the app says so rather than
+guessing.
+
 ## Per-directory profiles
 
 `cpx bind <profile>` writes a marker-delimited block into that directory's
@@ -280,7 +293,7 @@ no decision the CLI does not.
 ## Development
 
 ```bash
-make test    # 354 Rust tests, clippy with warnings denied, and a UI typecheck
+make test    # 368 Rust tests, clippy with warnings denied, and a UI typecheck
 make dev     # the app against a live UI
 ```
 

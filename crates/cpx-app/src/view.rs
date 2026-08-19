@@ -107,6 +107,17 @@ pub struct StatuslineView {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ScriptView {
+    pub path: String,
+    pub contents: String,
+    /// The file is cpx's own copy, so edits are safe from installers.
+    pub owned: bool,
+    /// Set when something else will overwrite this file later.
+    pub managed_by: Option<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct DefaultSessionView {
     pub dir: String,
     pub account: Option<String>,

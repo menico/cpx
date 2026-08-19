@@ -2,6 +2,7 @@ import { useState } from "react";
 import type { ProfileDetail as Detail, ResourceMode } from "./api";
 import { api } from "./api";
 import type { Ask } from "./Ask";
+import { ScriptEditor } from "./ScriptEditor";
 import { StatuslineControl } from "./StatuslineControl";
 
 /** Eight identity colours, spaced far enough apart to tell apart at 3px wide. */
@@ -41,6 +42,7 @@ interface Props {
 
 export function ProfileDetail({ detail, onBack, onChanged, onError, onAsk }: Props) {
   const { row } = detail;
+  const [editing, setEditing] = useState(false);
   const [model, setModel] = useState(row.model ?? "");
   const [description, setDescription] = useState(row.description);
 
@@ -55,6 +57,12 @@ export function ProfileDetail({ detail, onBack, onChanged, onError, onAsk }: Pro
 
   const setField = (field: string, value: string) =>
     guard(() => api.setField(row.name, field, value.trim() === "" ? null : value.trim()));
+
+  if (editing) {
+    return (
+      <ScriptEditor profile={row.name} onClose={() => setEditing(false)} onError={onError} />
+    );
+  }
 
   return (
     <div className="sheet">
@@ -168,6 +176,7 @@ export function ProfileDetail({ detail, onBack, onChanged, onError, onAsk }: Pro
             label={row.name}
             onChanged={onChanged}
             onError={onError}
+            onEdit={() => setEditing(true)}
           />
         </div>
 

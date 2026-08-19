@@ -653,3 +653,206 @@ fn installing_on_the_base_keeps_a_backup_of_the_original() {
     let backup = applied.backup.expect("a backup is required for the base");
     assert_eq!(fs::read_to_string(&backup).unwrap(), original);
 }
+
+// --- finding the script behind a command ---
+
+#[test]
+fn a_node_script_is_found_and_its_tilde_expanded() {
+    let home = Path::new("/Users/tester");
+    assert_eq!(
+        script_path_of("node ~/.claude/statusline.mjs", home),
+        Some(PathBuf::from("/Users/tester/.claude/statusline.mjs"))
+    );
+}
+
+#[test]
+fn a_quoted_path_with_spaces_is_found() {
+    let home = Path::new("/Users/tester");
+    assert_eq!(
+        script_path_of("bash '/Users/tester/my scripts/line.sh'", home),
+        Some(PathBuf::from("/Users/tester/my scripts/line.sh"))
+    );
+}
+
+#[test]
+fn interpreter_flags_are_skipped() {
+    let home = Path::new("/Users/tester");
+    assert_eq!(
+        script_path_of("node --no-warnings /opt/line.mjs", home),
+        Some(PathBuf::from("/opt/line.mjs"))
+    );
+}
+
+#[test]
+fn a_direct_executable_path_is_the_script() {
+    let home = Path::new("/Users/tester");
+    assert_eq!(
+        script_path_of("/usr/local/bin/mystatus --compact", home),
+        Some(PathBuf::from("/usr/local/bin/mystatus"))
+    );
+}
+
+#[test]
+fn commands_with_no_file_to_edit_report_none() {
+    let home = Path::new("/Users/tester");
+    for command in [
+        "npx fold-statusline",
+        "npm exec statusline",
+        "mystatus",
+        "",
+    ] {
+        assert_eq!(script_path_of(command, home), None, "for {command:?}");
+    }
+}
+
+#[test]
+fn arguments_after_the_script_do_not_confuse_it() {
+    let home = Path::new("/Users/tester");
+    assert_eq!(
+        script_path_of("node /opt/line.mjs --theme dark", home),
+        Some(PathBuf::from("/opt/line.mjs"))
+    );
+}
+
+// --- editing the script ---
+
+/// A home whose base statusline runs a script we can open.
+fn env_with_script(body: &str) -> (TempDir, PathBuf) {
+    let dir = TempDir::new().unwrap();
+    let source = dir.path().join(".claude");
+    fs::create_dir_all(&source).unwrap();
+    let script = source.join("statusline.mjs");
+    fs::write(&script, body).unwrap();
+    fs::write(
+        source.join("settings.json"),
+        format!(
+            r#"{{"statusLine":{{"type":"command","command":"node {}"}}}}"#,
+            script.display()
+        ),
+    )
+    .unwrap();
+    (dir, script)
+}
+
+#[test]
+fn the_script_behind_the_base_statusline_can_be_read() {
+    let (dir, script) = env_with_script("console.log('hi')\n");
+    let layout = Layout::new(dir.path());
+    let config = Config::parse("version = 1\n", dir.path()).unwrap();
+
+    let found = script_of(&config, &layout, &Target::Base).unwrap().unwrap();
+    assert_eq!(found.path, script);
+    assert_eq!(found.contents, "console.log('hi')\n");
+    assert!(!found.owned, "a script under ~/.claude is not ours");
+}
+
+#[test]
+fn a_script_installed_by_a_package_manager_is_flagged() {
+    let (dir, _) = env_with_script("// install with `npx github:someone/fold-statusline`\nconsole.log(1)\n");
+    let layout = Layout::new(dir.path());
+    let config = Config::parse("version = 1\n", dir.path()).unwrap();
+
+    let found = script_of(&config, &layout, &Target::Base).unwrap().unwrap();
+    assert!(
+        found.managed_by.is_some(),
+        "editing this in place would be lost on its next update"
+    );
+    assert!(found.managed_by.unwrap().contains("npx"));
+}
+
+#[test]
+fn a_plain_script_is_not_flagged() {
+    let (dir, _) = env_with_script("console.log('mine')\n");
+    let layout = Layout::new(dir.path());
+    let config = Config::parse("version = 1\n", dir.path()).unwrap();
+    assert_eq!(
+        script_of(&config, &layout, &Target::Base).unwrap().unwrap().managed_by,
+        None
+    );
+}
+
+#[test]
+fn a_statusline_with_no_file_behind_it_reports_nothing_to_edit() {
+    let dir = TempDir::new().unwrap();
+    let source = dir.path().join(".claude");
+    fs::create_dir_all(&source).unwrap();
+    fs::write(
+        source.join("settings.json"),
+        r#"{"statusLine":{"command":"npx fold-statusline"}}"#,
+    )
+    .unwrap();
+    let layout = Layout::new(dir.path());
+    let config = Config::parse("version = 1\n", dir.path()).unwrap();
+    assert_eq!(script_of(&config, &layout, &Target::Base).unwrap(), None);
+}
+
+#[test]
+fn saving_keeps_the_previous_contents() {
+    let (dir, script) = env_with_script("original\n");
+    let backup = save_script(&script, "edited\n").unwrap().unwrap();
+    assert_eq!(fs::read_to_string(&script).unwrap(), "edited\n");
+    assert_eq!(fs::read_to_string(&backup).unwrap(), "original\n");
+    drop(dir);
+}
+
+#[test]
+fn saving_preserves_the_executable_bit() {
+    use std::os::unix::fs::PermissionsExt;
+    let (dir, script) = env_with_script("#!/bin/sh\necho hi\n");
+    fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
+    save_script(&script, "#!/bin/sh\necho bye\n").unwrap();
+    let mode = fs::metadata(&script).unwrap().permissions().mode() & 0o111;
+    assert_ne!(mode, 0, "an executable statusline must stay executable");
+    drop(dir);
+}
+
+#[test]
+fn forking_copies_the_script_somewhere_edits_are_safe() {
+    let (dir, original) = env_with_script("// install with `npx thing`\nconsole.log(1)\n");
+    let layout = Layout::new(dir.path());
+    let config = Config::parse("version = 1\n[profiles.work]\n", dir.path()).unwrap();
+
+    let fork = fork_script(&config, &layout, &Target::Profile("work".into()))
+        .unwrap()
+        .expect("a shared script should be forkable");
+
+    assert!(fork.path.starts_with(&layout.root), "{}", fork.path.display());
+    assert_eq!(
+        fs::read_to_string(&fork.path).unwrap(),
+        fs::read_to_string(&original).unwrap(),
+        "the copy should start identical"
+    );
+    assert!(fork.command.contains("node"), "the interpreter should carry over: {}", fork.command);
+    assert!(fork.command.contains(fork.path.to_str().unwrap()));
+    assert_eq!(
+        fs::read_to_string(&original).unwrap(),
+        "// install with `npx thing`\nconsole.log(1)\n",
+        "the original must not be touched"
+    );
+}
+
+#[test]
+fn a_script_already_ours_is_not_forked_again() {
+    let dir = TempDir::new().unwrap();
+    let layout = Layout::new(dir.path());
+    let source = dir.path().join(".claude");
+    fs::create_dir_all(&source).unwrap();
+
+    let owned = layout.root.join("work").join("custom-line.mjs");
+    fs::create_dir_all(owned.parent().unwrap()).unwrap();
+    fs::write(&owned, "mine\n").unwrap();
+    fs::write(
+        source.join("settings.json"),
+        format!(r#"{{"statusLine":{{"command":"node {}"}}}}"#, owned.display()),
+    )
+    .unwrap();
+
+    let config = Config::parse("version = 1\n[profiles.work]\n", dir.path()).unwrap();
+    assert!(script_of(&config, &layout, &Target::Profile("work".into()))
+        .unwrap()
+        .unwrap()
+        .owned);
+    assert!(fork_script(&config, &layout, &Target::Profile("work".into()))
+        .unwrap()
+        .is_none());
+}
