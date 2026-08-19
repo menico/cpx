@@ -78,6 +78,16 @@ export interface CheckView {
   remedy: string | null;
 }
 
+export interface Statusline {
+  /** A cpx badge is installed for this target. */
+  badge: boolean;
+  /** What the badge sits in front of, or what is configured now. */
+  delegate: string | null;
+  script: string;
+  /** The change is recorded in config.toml and takes effect on the next apply. */
+  needsApply: boolean;
+}
+
 export interface DefaultSession {
   dir: string;
   account: string | null;
@@ -126,6 +136,10 @@ const real = {
   setResource: (profile: string, resource: string, mode: ResourceMode) =>
     invoke<void>("set_resource", { profile, resource, mode }),
   defaultSession: () => invoke<DefaultSession>("default_session"),
+  statusline: (profile: string | null) => invoke<Statusline>("statusline", { profile }),
+  setStatusline: (profile: string | null, label: string | null, refresh: number | null) =>
+    invoke<void>("set_statusline", { profile, label, refresh }),
+  clearStatusline: (profile: string | null) => invoke<void>("clear_statusline", { profile }),
   adoptionCandidates: () => invoke<AdoptionRow[]>("adoption_candidates"),
   adopt: (dir: string, name: string | null) => invoke<void>("adopt", { dir, name }),
   configPath: () => invoke<string>("config_path"),

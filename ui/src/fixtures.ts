@@ -7,6 +7,7 @@
 import type {
   AdoptionRow,
   DefaultSession,
+  Statusline,
   ApplyView,
   BindingRow,
   CheckView,
@@ -27,6 +28,13 @@ const RESOURCES: { resource: string; mode: ResourceMode; dir: boolean; json: boo
   { resource: "hooks", mode: "link", dir: true, json: false },
   { resource: "projects", mode: "own", dir: true, json: false },
 ];
+
+const STATUSLINE: Statusline = {
+  badge: false,
+  delegate: "node ~/.claude/statusline.mjs",
+  script: "/Users/you/.claude-profiles/work/statusline.sh",
+  needsApply: true,
+};
 
 const DEFAULT_SESSION: DefaultSession = {
   dir: "/Users/you/.claude",
@@ -187,6 +195,9 @@ export const fixtures = {
   setField: () => Promise.resolve(),
   setResource: () => Promise.resolve(),
   defaultSession: () => Promise.resolve(DEFAULT_SESSION),
+  statusline: () => Promise.resolve(STATUSLINE),
+  setStatusline: () => Promise.resolve(),
+  clearStatusline: () => Promise.resolve(),
   adoptionCandidates: () => Promise.resolve(ADOPTABLE),
   adopt: unsupported,
   configPath: () => Promise.resolve("/Users/you/.claude-profiles/config.toml"),

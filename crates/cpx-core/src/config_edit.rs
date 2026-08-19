@@ -227,3 +227,83 @@ pub fn add_adopted_profile(
     profiles.insert(&adoption.name, Item::Table(table));
     validated(doc)
 }
+
+/// Set (or clear) the merge patch for a resource.
+///
+/// A patch only means anything in `merge` mode, so setting one selects that
+/// mode too rather than leaving a patch that nothing reads.
+pub fn set_resource_patch(
+    text: &str,
+    profile: &str,
+    resource: &str,
+    patch: Option<&serde_json::Value>,
+) -> Result<String, EditError> {
+    let mut doc: DocumentMut = text.parse()?;
+    let table = profile_mut(&mut doc, profile)?;
+
+    if !table.contains_key("resources") {
+        let mut resources = Table::new();
+        resources.set_implicit(false);
+        table["resources"] = Item::Table(resources);
+    }
+    let resources = table["resources"]
+        .as_table_mut()
+        .ok_or_else(|| EditError::UnknownProfile(profile.to_string()))?;
+
+    match patch {
+        None => {
+            if let Some(entry) = resources.get_mut(resource) {
+                if let Some(entry) = entry.as_table_like_mut() {
+                    entry.remove("patch");
+                }
+            }
+        }
+        Some(patch) => {
+            let mut entry = Table::new();
+            entry["mode"] = toml_edit::value("merge");
+            entry["patch"] = json_to_toml(patch)?;
+            resources.insert(resource, Item::Table(entry));
+        }
+    }
+
+    validated(doc)
+}
+
+/// Convert JSON into an inline TOML value, so a patch reads as one line.
+fn json_to_toml(value: &serde_json::Value) -> Result<Item, EditError> {
+    use serde_json::Value as J;
+    use toml_edit::{Array, InlineTable, Value as T};
+
+    fn convert(value: &serde_json::Value) -> Option<T> {
+        Some(match value {
+            J::Null => return None,
+            J::Bool(b) => T::from(*b),
+            J::Number(n) => match (n.as_i64(), n.as_f64()) {
+                (Some(i), _) => T::from(i),
+                (None, Some(f)) => T::from(f),
+                _ => return None,
+            },
+            J::String(s) => T::from(s.as_str()),
+            J::Array(items) => {
+                let mut array = Array::new();
+                for item in items {
+                    array.push(convert(item)?);
+                }
+                T::Array(array)
+            }
+            J::Object(map) => {
+                let mut table = InlineTable::new();
+                for (key, item) in map {
+                    if let Some(converted) = convert(item) {
+                        table.insert(key, converted);
+                    }
+                }
+                T::InlineTable(table)
+            }
+        })
+    }
+
+    convert(value)
+        .map(Item::Value)
+        .ok_or_else(|| EditError::UnwritableField("patch".to_string()))
+}

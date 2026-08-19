@@ -94,6 +94,19 @@ pub struct CheckView {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct StatuslineView {
+    /// Whether a cpx badge is installed for this target.
+    pub badge: bool,
+    /// The statusline the badge delegates to, or what is configured now.
+    pub delegate: Option<String>,
+    /// Where the generated script would live.
+    pub script: String,
+    /// True when the change is recorded in config.toml and needs an apply.
+    pub needs_apply: bool,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct DefaultSessionView {
     pub dir: String,
     pub account: Option<String>,

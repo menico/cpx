@@ -85,6 +85,7 @@ pub fn render_block(
     profile_dir: &Path,
     profile_bin_dir: &Path,
     env: &BTreeMap<String, String>,
+    color: Option<&str>,
 ) -> String {
     use std::fmt::Write;
     let mut s = String::new();
@@ -98,6 +99,9 @@ pub fn render_block(
     )
     .unwrap();
     writeln!(s, "export CLAUDE_PROFILE={}", sh_quote(name)).unwrap();
+    if let Some(color) = color {
+        writeln!(s, "export CPX_PROFILE_COLOR={}", sh_quote(color)).unwrap();
+    }
     for (key, value) in env {
         writeln!(s, "export {key}={}", sh_quote(value)).unwrap();
     }
@@ -279,6 +283,7 @@ pub fn plan_bind(
         &config.config_dir(layout, profile_name),
         &layout.profile_bin_dir(profile_name),
         &profile.env,
+        profile.color.as_deref(),
     );
 
     let envrc = dir.join(".envrc");

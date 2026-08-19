@@ -256,3 +256,83 @@ fn adopting_a_name_that_is_taken_is_refused() {
         Err(EditError::ProfileExists(_))
     ));
 }
+
+// --- merge patches ---
+
+#[test]
+fn a_patch_can_be_set_on_a_merged_resource() {
+    let patch = serde_json::json!({"statusLine": {"type": "command", "command": "bash x.sh"}});
+    let out = set_resource_patch(WITH_COMMENTS, "work", "settings", Some(&patch)).unwrap();
+    let cfg = parse(&out);
+    let spec = &cfg.profiles["work"].resources[&cpx_core::config::ResourceKey::Settings];
+    assert_eq!(spec.mode, cpx_core::config::ResourceMode::Merge);
+    assert_eq!(spec.patch.as_ref().unwrap()["statusLine"]["command"], "bash x.sh");
+}
+
+#[test]
+fn setting_a_patch_twice_replaces_it_rather_than_merging() {
+    let first = set_resource_patch(
+        WITH_COMMENTS,
+        "work",
+        "settings",
+        Some(&serde_json::json!({"statusLine": {"command": "one"}})),
+    )
+    .unwrap();
+    let second = set_resource_patch(
+        &first,
+        "work",
+        "settings",
+        Some(&serde_json::json!({"statusLine": {"command": "two"}})),
+    )
+    .unwrap();
+    let cfg = parse(&second);
+    assert_eq!(
+        cfg.profiles["work"].resources[&cpx_core::config::ResourceKey::Settings]
+            .patch
+            .as_ref()
+            .unwrap()["statusLine"]["command"],
+        "two"
+    );
+    assert_eq!(second.matches("statusLine").count(), 1, "{second}");
+}
+
+#[test]
+fn a_patch_can_be_cleared() {
+    let set = set_resource_patch(
+        WITH_COMMENTS,
+        "work",
+        "settings",
+        Some(&serde_json::json!({"statusLine": {"command": "one"}})),
+    )
+    .unwrap();
+    let cleared = set_resource_patch(&set, "work", "settings", None).unwrap();
+    let cfg = parse(&cleared);
+    assert_eq!(
+        cfg.profiles["work"].resources[&cpx_core::config::ResourceKey::Settings].patch,
+        None
+    );
+}
+
+#[test]
+fn setting_a_patch_preserves_comments_and_other_profiles() {
+    let out = set_resource_patch(
+        WITH_COMMENTS,
+        "work",
+        "settings",
+        Some(&serde_json::json!({"model": "opus"})),
+    )
+    .unwrap();
+    assert!(out.contains("# my settings"), "{out}");
+    assert!(out.contains("ANTHROPIC_LOG"), "{out}");
+}
+
+#[test]
+fn a_patch_on_a_resource_that_cannot_merge_is_refused() {
+    assert!(set_resource_patch(
+        WITH_COMMENTS,
+        "work",
+        "commands",
+        Some(&serde_json::json!({"x": 1}))
+    )
+    .is_err());
+}

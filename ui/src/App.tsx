@@ -271,7 +271,9 @@ export function App() {
               </button>
               ))
             )}
-            {defaultSession && <DefaultSession session={defaultSession} />}
+            {defaultSession && (
+              <DefaultSession session={defaultSession} onChanged={refresh} onError={setError} />
+            )}
             <Adoptable candidates={adoptable} onAdopt={adoptDirectory} />
           </>
         )}

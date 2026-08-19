@@ -2,6 +2,7 @@ import { useState } from "react";
 import type { ProfileDetail as Detail, ResourceMode } from "./api";
 import { api } from "./api";
 import type { Ask } from "./Ask";
+import { StatuslineControl } from "./StatuslineControl";
 
 /** Eight identity colours, spaced far enough apart to tell apart at 3px wide. */
 export const SWATCHES = [
@@ -158,6 +159,16 @@ export function ProfileDetail({ detail, onBack, onChanged, onError, onAsk }: Pro
               </div>
             </div>
           )}
+        </div>
+
+        <div className="group" style={{ ["--bar" as string]: row.color ?? undefined }}>
+          <h3>Statusline</h3>
+          <StatuslineControl
+            profile={row.name}
+            label={row.name}
+            onChanged={onChanged}
+            onError={onError}
+          />
         </div>
 
         <div className="group">

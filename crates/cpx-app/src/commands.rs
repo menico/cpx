@@ -190,6 +190,76 @@ pub fn set_resource(profile: String, resource: String, mode: String) -> Answer<(
     edit(|text| config_edit::set_resource_mode(text, &profile, &resource, &mode))
 }
 
+/// Resolve an optional profile name into a statusline target.
+fn statusline_target(profile: Option<String>) -> cpx_core::statusline::Target {
+    match profile {
+        Some(name) => cpx_core::statusline::Target::Profile(name),
+        None => cpx_core::statusline::Target::Base,
+    }
+}
+
+/// Whether a badge is installed, and what it sits in front of.
+#[tauri::command]
+pub fn statusline(profile: Option<String>) -> Answer<StatuslineView> {
+    let install = install()?;
+    let target = statusline_target(profile);
+    let plan = cpx_core::statusline::plan_install(&install.config, &install.layout, &target, None)
+        .map_err(err)?;
+    Ok(StatuslineView {
+        badge: plan.replacing,
+        delegate: plan.delegate.as_ref().map(|d| d.command.clone()),
+        script: plan.script_path.display().to_string(),
+        needs_apply: matches!(
+            plan.write,
+            cpx_core::statusline::SettingsWrite::ConfigPatch { .. }
+        ),
+    })
+}
+
+/// Put a badge in front of whatever statusline is configured.
+#[tauri::command]
+pub fn set_statusline(
+    profile: Option<String>,
+    label: Option<String>,
+    refresh: Option<u64>,
+) -> Answer<()> {
+    let install = install()?;
+    let target = statusline_target(profile);
+    let plan = cpx_core::statusline::plan_install(
+        &install.config,
+        &install.layout,
+        &target,
+        label.as_deref(),
+    )
+    .map_err(err)?;
+
+    let text = install.config_text().map_err(err)?;
+    let applied = cpx_core::statusline::install(&plan, &text, refresh).map_err(err)?;
+    if let Some(config_text) = applied.config_text {
+        install.write_config(&config_text).map_err(err)?;
+    }
+    Ok(())
+}
+
+/// Remove the badge, restoring what was there before.
+#[tauri::command]
+pub fn clear_statusline(profile: Option<String>) -> Answer<()> {
+    let install = install()?;
+    let target = statusline_target(profile);
+    let plan = cpx_core::statusline::plan_install(&install.config, &install.layout, &target, None)
+        .map_err(err)?;
+    if !plan.replacing {
+        return Ok(());
+    }
+
+    let text = install.config_text().map_err(err)?;
+    let applied = cpx_core::statusline::remove(&plan, &text).map_err(err)?;
+    if let Some(config_text) = applied.config_text {
+        install.write_config(&config_text).map_err(err)?;
+    }
+    Ok(())
+}
+
 /// The directory a plain `claude` uses. Reported, never managed.
 #[tauri::command]
 pub fn default_session() -> Answer<DefaultSessionView> {

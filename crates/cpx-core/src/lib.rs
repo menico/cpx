@@ -1,3 +1,4 @@
+pub mod statusline;
 pub mod default_session;
 pub mod env_path;
 pub mod adopt;

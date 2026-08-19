@@ -1,11 +1,18 @@
 import type { DefaultSession as Session } from "./api";
+import { StatuslineControl } from "./StatuslineControl";
 
 /** The directory a plain `claude` uses.
  *
  *  cpx treats it as the source profiles inherit from rather than as a profile,
  *  so it is shown and never managed — but leaving it out would mean the app
  *  lists fewer accounts than the machine has. */
-export function DefaultSession({ session }: { session: Session }) {
+interface Props {
+  session: Session;
+  onChanged: () => void;
+  onError: (message: string) => void;
+}
+
+export function DefaultSession({ session, onChanged, onError }: Props) {
   // Already listed as a profile of its own.
   if (session.claimedBy) return null;
 
@@ -34,6 +41,9 @@ export function DefaultSession({ session }: { session: Session }) {
           </div>
         </div>
       </div>
+      {/* The badge here reads whichever profile is running, so a profile that
+          inherits these settings still shows its own name. */}
+      <StatuslineControl profile={null} label="profile" onChanged={onChanged} onError={onError} />
     </div>
   );
 }

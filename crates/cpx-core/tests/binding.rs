@@ -15,6 +15,7 @@ fn block(name: &str) -> String {
         Path::new("/home/t/.claude-profiles/work"),
         Path::new("/home/t/.claude-profiles/work/bin"),
         &BTreeMap::new(),
+        None,
     )
 }
 
@@ -46,12 +47,7 @@ fn a_block_puts_the_profile_shim_on_path() {
 fn a_block_carries_the_profile_env_vars() {
     let mut env = BTreeMap::new();
     env.insert("MY_VAR".to_string(), "value".to_string());
-    let b = render_block(
-        "work",
-        Path::new("/p/work"),
-        Path::new("/p/work/bin"),
-        &env,
-    );
+    let b = render_block("work", Path::new("/p/work"), Path::new("/p/work/bin"), &env, None);
     assert!(b.contains("export MY_VAR="), "{b}");
 }
 
@@ -59,7 +55,7 @@ fn a_block_carries_the_profile_env_vars() {
 fn block_values_are_quoted_against_injection() {
     let mut env = BTreeMap::new();
     env.insert("EVIL".to_string(), "$(touch /tmp/pwned)".to_string());
-    let b = render_block("work", Path::new("/p/work"), Path::new("/p/work/bin"), &env);
+    let b = render_block("work", Path::new("/p/work"), Path::new("/p/work/bin"), &env, None);
     assert!(b.contains("export EVIL='$(touch /tmp/pwned)'"), "{b}");
 }
 
@@ -534,4 +530,28 @@ fn a_binding_whose_directory_vanished_is_reported() {
         health(&planned.binding, &e.config()),
         BindingHealth::DirectoryMissing
     );
+}
+
+#[test]
+fn a_block_exports_the_identity_colour_for_the_statusline_badge() {
+    let b = render_block(
+        "work",
+        Path::new("/p/work"),
+        Path::new("/p/work/bin"),
+        &BTreeMap::new(),
+        Some("#5c8dff"),
+    );
+    assert!(b.contains("export CPX_PROFILE_COLOR='#5c8dff'"), "{b}");
+}
+
+#[test]
+fn a_block_omits_the_colour_when_the_profile_has_none() {
+    let b = render_block(
+        "work",
+        Path::new("/p/work"),
+        Path::new("/p/work/bin"),
+        &BTreeMap::new(),
+        None,
+    );
+    assert!(!b.contains("CPX_PROFILE_COLOR"), "{b}");
 }

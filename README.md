@@ -4,9 +4,9 @@ Run several Claude Code accounts on one machine. Each profile gets its own
 config directory, its own login, its own command, and can be bound to a
 directory so the right account is used automatically.
 
-Per-profile statuslines and per-profile MCP servers need nothing extra: both
-live in the config directory, so each profile already has its own. Settings
-sync across machines is deliberately not included.
+Per-profile MCP servers need nothing extra: they live in the config directory,
+so each profile already has its own. Settings sync across machines is
+deliberately not included.
 
 ## Install
 
@@ -152,6 +152,37 @@ still matches and the profile stays signed in.
 You can then opt any resource into `link` or `merge` deliberately, seeing the
 plan first.
 
+## Statusline badges
+
+A statusline script written for the default config directory has no idea which
+profile it is running under. A common one reads `~/.claude.json` directly, so
+it reports the *default* account in every profile — the statusline says one
+thing while the session is signed in as someone else.
+
+```bash
+cpx statusline show            # what each profile uses, and whether it has a badge
+cpx statusline set work        # put a badge in front of work's statusline
+cpx statusline set --base      # and in front of the default session's
+cpx statusline clear work      # put back exactly what was there
+```
+
+The badge is a generated wrapper that prints the profile, then hands the
+session on stdin to whatever statusline was already configured:
+
+```
+● work │ <your existing statusline, untouched>
+```
+
+Your script is never edited, so reinstalling it — `npx` and friends — cannot
+undo this, and installing a badge twice wraps the original rather than nesting.
+The name and colour come from `CLAUDE_PROFILE` and `CPX_PROFILE_COLOR` at run
+time, so one badge installed on the base settings still shows the right profile
+in every profile that inherits it.
+
+For a profile whose settings are `merge`d, the badge is recorded as a patch in
+`config.toml` and applied on the next `cpx apply`; otherwise the profile's own
+`settings.json` is edited, and the previous file is kept alongside it.
+
 ## Per-directory profiles
 
 `cpx bind <profile>` writes a marker-delimited block into that directory's
@@ -203,6 +234,7 @@ claude-work auth login
 | `cpx run <profile> -- <args>` | one-shot under a profile |
 | `cpx clone <from> <to>` | duplicate a profile's config, without credentials |
 | `cpx adopt [dir]` | manage a config directory you already have, in place |
+| `cpx statusline show\|set\|clear` | profile badge in front of an existing statusline |
 | `cpx --version` | the installed version |
 | `cpx profile add\|rm <name>` | edit the config, preserving comments |
 
@@ -248,7 +280,7 @@ no decision the CLI does not.
 ## Development
 
 ```bash
-make test    # 311 Rust tests, clippy with warnings denied, and a UI typecheck
+make test    # 354 Rust tests, clippy with warnings denied, and a UI typecheck
 make dev     # the app against a live UI
 ```
 

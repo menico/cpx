@@ -73,6 +73,11 @@ pub fn wrapper_script(ctx: &WrapperContext) -> String {
 
     writeln!(s, "export CLAUDE_CONFIG_DIR={}", quote_path(ctx.profile_dir)).unwrap();
     writeln!(s, "export CLAUDE_PROFILE={}", sh_quote(ctx.name)).unwrap();
+    // Read by a generated statusline badge, so one badge script can colour
+    // itself for whichever profile is running.
+    if let Some(color) = &ctx.profile.color {
+        writeln!(s, "export CPX_PROFILE_COLOR={}", sh_quote(color)).unwrap();
+    }
     for (key, value) in &ctx.profile.env {
         writeln!(s, "export {}={}", key, sh_quote(value)).unwrap();
     }
@@ -299,5 +304,34 @@ mod tests {
             wrapper_script(&ctx),
             "`claude` inside a bound directory must behave exactly like `claude-work`"
         );
+    }
+}
+
+#[cfg(test)]
+mod color_tests {
+    use super::*;
+    use crate::config::Config;
+    use std::path::PathBuf;
+
+    fn script(toml: &str) -> String {
+        let cfg = Config::parse(toml, Path::new("/Users/tester")).unwrap();
+        wrapper_script(&WrapperContext {
+            name: "work",
+            profile: &cfg.profiles["work"],
+            profile_dir: &PathBuf::from("/p/work"),
+            claude_binary: &PathBuf::from("/usr/bin/claude"),
+        })
+    }
+
+    #[test]
+    fn the_wrapper_exports_the_identity_colour_for_the_statusline_badge() {
+        let s = script("version = 1\n[profiles.work]\ncolor = \"#5c8dff\"\n");
+        assert!(s.contains("export CPX_PROFILE_COLOR='#5c8dff'"), "{s}");
+    }
+
+    #[test]
+    fn a_profile_without_a_colour_exports_nothing_extra() {
+        let s = script("version = 1\n[profiles.work]\n");
+        assert!(!s.contains("CPX_PROFILE_COLOR"), "{s}");
     }
 }

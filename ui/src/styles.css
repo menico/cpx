@@ -614,3 +614,12 @@ select { cursor: default; padding-right: 22px; }
 
 .unmanaged-row .grow { flex: 1; min-width: 0; overflow: hidden; }
 .unmanaged-row .name { font-size: 12.5px; }
+
+/* ---------- statusline preview ---------- */
+
+.badge-sample {
+  color: var(--bar, var(--accent));
+  font-weight: 600;
+}
+
+.badge-rest { color: var(--muted); }

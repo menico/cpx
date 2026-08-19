@@ -98,6 +98,35 @@ enum Command {
     /// Add or remove profiles in the config.
     #[command(subcommand)]
     Profile(ProfileCommand),
+    /// Show or change which statusline each profile uses.
+    #[command(subcommand)]
+    Statusline(StatuslineCommand),
+}
+
+#[derive(Subcommand)]
+enum StatuslineCommand {
+    /// Show the statusline each profile is using.
+    Show,
+    /// Put a profile badge in front of the statusline already configured.
+    Set {
+        /// The profile to change. Omit with --base for the default session.
+        profile: Option<String>,
+        /// Change the default session's statusline (~/.claude/settings.json).
+        #[arg(long)]
+        base: bool,
+        /// Text for the badge. Defaults to the profile name.
+        #[arg(long)]
+        label: Option<String>,
+        /// Seconds between refreshes.
+        #[arg(long)]
+        refresh: Option<u64>,
+    },
+    /// Remove the badge, restoring the statusline that was there before.
+    Clear {
+        profile: Option<String>,
+        #[arg(long)]
+        base: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -139,6 +168,16 @@ fn run() -> Result<()> {
         Command::Run { profile, args } => cmd_run(&profile, &args),
         Command::Clone { from, to } => cmd_clone(&from, &to),
         Command::Adopt { dir, name } => cmd_adopt(dir, name.as_deref(), cli.json),
+        Command::Statusline(StatuslineCommand::Show) => cmd_statusline_show(cli.json),
+        Command::Statusline(StatuslineCommand::Set {
+            profile,
+            base,
+            label,
+            refresh,
+        }) => cmd_statusline_set(profile.as_deref(), base, label.as_deref(), refresh),
+        Command::Statusline(StatuslineCommand::Clear { profile, base }) => {
+            cmd_statusline_clear(profile.as_deref(), base)
+        }
         Command::Profile(ProfileCommand::Add { name, description }) => {
             edit_config(|text| Ok(config_edit::add_profile(text, &name, &description)?))?;
             println!("Added profile `{name}`. Run `cpx apply` to create it.");
@@ -614,6 +653,158 @@ fn cmd_run(profile: &str, args: &[String]) -> Result<()> {
     }
     // exec, so signals and the exit status belong to Claude, not to cpx.
     Err(std::process::Command::new(&wrapper).args(args).exec().into())
+}
+
+/// Resolve the profile/--base pair into one target.
+fn statusline_target(profile: Option<&str>, base: bool) -> Result<cpx_core::statusline::Target> {
+    use cpx_core::statusline::Target;
+    match (profile, base) {
+        (Some(_), true) => bail!("give a profile or --base, not both"),
+        (Some(name), false) => Ok(Target::Profile(name.to_string())),
+        (None, true) => Ok(Target::Base),
+        (None, false) => bail!("which statusline? name a profile, or pass --base"),
+    }
+}
+
+/// Shorten a command for display without hiding which script it runs.
+fn brief(command: &str) -> String {
+    let home = std::env::var("HOME").unwrap_or_default();
+    let shown = if home.is_empty() {
+        command.to_string()
+    } else {
+        command.replace(&home, "~")
+    };
+    if shown.chars().count() > 54 {
+        let tail: String = shown.chars().skip(shown.chars().count() - 51).collect();
+        format!("...{tail}")
+    } else {
+        shown
+    }
+}
+
+fn cmd_statusline_show(as_json: bool) -> Result<()> {
+    use cpx_core::statusline::{command_in, delegate_of_wrapper, Target};
+
+    let session = Session::load()?;
+    let layout = &session.layout;
+
+    let mut rows = Vec::new();
+    for name in session.config.profiles.keys() {
+        let plan = cpx_core::statusline::plan_install(
+            &session.config,
+            layout,
+            &Target::Profile(name.clone()),
+            None,
+        )?;
+        let configured = command_in(&session.config.config_dir(layout, name).join("settings.json"))?;
+        rows.push(json!({
+            "target": name,
+            "badge": plan.replacing,
+            "command": configured,
+            "delegate": plan.delegate.as_ref().map(|d| d.command.clone()),
+        }));
+    }
+
+    let base_settings = session.config.source_dir.join("settings.json");
+    let base_plan =
+        cpx_core::statusline::plan_install(&session.config, layout, &Target::Base, None)?;
+    rows.push(json!({
+        "target": "(base)",
+        "badge": base_plan.replacing,
+        "command": command_in(&base_settings)?,
+        "delegate": base_plan.delegate.as_ref().map(|d| d.command.clone()),
+    }));
+
+    if as_json {
+        println!("{}", serde_json::to_string_pretty(&rows)?);
+        return Ok(());
+    }
+
+    println!("{:<14} {:<6} {}", "TARGET", "BADGE", "STATUSLINE");
+    for row in &rows {
+        let command = row["command"].as_str().map(brief).unwrap_or_else(|| "—".into());
+        let badge = if row["badge"].as_bool() == Some(true) { "yes" } else { "no" };
+        println!("{:<14} {:<6} {}", row["target"].as_str().unwrap_or(""), badge, command);
+    }
+
+    let wrapped: Vec<&serde_json::Value> = rows.iter().filter(|r| r["badge"] == true).collect();
+    if wrapped.is_empty() {
+        println!();
+        println!("Add a badge with `cpx statusline set <profile>`. Whatever statusline is");
+        println!("already configured keeps working — the badge goes in front of it.");
+    } else {
+        println!();
+        for row in wrapped {
+            if let Some(delegate) = row["delegate"].as_str() {
+                println!(
+                    "{}: badge, then {}",
+                    row["target"].as_str().unwrap_or(""),
+                    brief(delegate)
+                );
+            }
+        }
+    }
+    let _ = delegate_of_wrapper;
+    Ok(())
+}
+
+fn cmd_statusline_set(
+    profile: Option<&str>,
+    base: bool,
+    label: Option<&str>,
+    refresh: Option<u64>,
+) -> Result<()> {
+    let session = Session::load()?;
+    let target = statusline_target(profile, base)?;
+
+    let plan =
+        cpx_core::statusline::plan_install(&session.config, &session.layout, &target, label)?;
+    let text = std::fs::read_to_string(session.layout.config_file())?;
+    let applied = cpx_core::statusline::install(&plan, &text, refresh)?;
+
+    if let Some(config_text) = &applied.config_text {
+        std::fs::write(session.layout.config_file(), config_text)?;
+    }
+
+    println!("Statusline badge installed.");
+    println!("  script   {}", plan.script_path.display());
+    match &plan.delegate {
+        Some(delegate) => println!("  then     {}", brief(&delegate.command)),
+        None => println!("  then     nothing else — the badge is the whole line"),
+    }
+    if let Some(backup) = &applied.backup {
+        println!("  backup   {}", backup.display());
+    }
+    if applied.config_text.is_some() {
+        println!("  recorded in config.toml as a settings patch; run `cpx apply`");
+    }
+    Ok(())
+}
+
+fn cmd_statusline_clear(profile: Option<&str>, base: bool) -> Result<()> {
+    let session = Session::load()?;
+    let target = statusline_target(profile, base)?;
+
+    let plan = cpx_core::statusline::plan_install(&session.config, &session.layout, &target, None)?;
+    if !plan.replacing {
+        println!("No cpx badge is installed there.");
+        return Ok(());
+    }
+
+    let text = std::fs::read_to_string(session.layout.config_file())?;
+    let applied = cpx_core::statusline::remove(&plan, &text)?;
+    if let Some(config_text) = &applied.config_text {
+        std::fs::write(session.layout.config_file(), config_text)?;
+    }
+
+    match &plan.delegate {
+        Some(delegate) => println!("Badge removed; restored {}", brief(&delegate.command)),
+        None => println!("Badge removed; no statusline is configured now."),
+    }
+    if applied.config_text.is_some() {
+        println!("Run `cpx apply` to regenerate the profile's settings.");
+    }
+    Ok(())
 }
 
 fn cmd_adopt(dir: Option<PathBuf>, name: Option<&str>, as_json: bool) -> Result<()> {
