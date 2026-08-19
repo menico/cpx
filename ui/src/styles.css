@@ -335,11 +335,12 @@ button { font: inherit; color: inherit; }
 
 /* ---------- detail panel ---------- */
 
+/* A detail view replaces the list rather than covering it. Overlaying an
+   absolutely positioned sheet left the list scrolling behind it. */
 .sheet {
-  position: absolute;
-  inset: 0;
   display: flex;
   flex-direction: column;
+  height: 100%;
   background: var(--surface);
   animation: slide 180ms cubic-bezier(0.2, 0.8, 0.2, 1);
 }

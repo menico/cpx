@@ -347,10 +347,70 @@ fn discovery_returns_directories_in_a_stable_order() {
     for name in [".claude-zulu", ".claude-alpha"] {
         let dir = env.home().join(name);
         fs::create_dir_all(dir.join("projects")).unwrap();
+        fs::write(dir.join("history.jsonl"), "").unwrap();
     }
     let names: Vec<_> = candidates(env.home(), &env.source(), &env.home().join(".claude-profiles"))
         .into_iter()
         .map(|a| a.name)
         .collect();
     assert_eq!(names, vec!["alpha", "hd", "zulu"]);
+}
+
+
+// --- telling a Claude directory from another tool's ---
+
+#[test]
+fn another_tools_directory_is_not_offered_for_adoption() {
+    // A home is full of dot-directories. ~/.cursor keeps a projects/ and
+    // ~/.gemini keeps a settings.json; neither is a Claude profile.
+    let env = Env::new();
+    for (name, marker) in [
+        (".cursor", "projects"),
+        (".cursor-tutor", "projects"),
+        (".factory", "settings.json"),
+        (".gemini", "settings.json"),
+    ] {
+        let dir = env.home().join(name);
+        fs::create_dir_all(&dir).unwrap();
+        if marker.ends_with(".json") {
+            fs::write(dir.join(marker), "{}").unwrap();
+        } else {
+            fs::create_dir_all(dir.join(marker)).unwrap();
+        }
+    }
+
+    let found: Vec<String> = candidates(env.home(), &env.source(), &env.home().join(".claude-profiles"))
+        .into_iter()
+        .map(|a| a.name)
+        .collect();
+    assert_eq!(found, vec!["hd"], "offered someone else's directory: {found:?}");
+}
+
+#[test]
+fn a_claude_json_alone_is_enough() {
+    let env = Env::new();
+    let dir = env.home().join(".claude-fresh");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(dir.join(".claude.json"), "{}").unwrap();
+    assert!(inspect(&dir, &env.source(), None).is_ok());
+}
+
+#[test]
+fn two_supporting_signs_are_enough_without_a_claude_json() {
+    let env = Env::new();
+    let dir = env.home().join(".claude-old");
+    fs::create_dir_all(dir.join("projects")).unwrap();
+    fs::write(dir.join("history.jsonl"), "").unwrap();
+    assert!(inspect(&dir, &env.source(), None).is_ok());
+}
+
+#[test]
+fn one_supporting_sign_is_not_enough() {
+    let env = Env::new();
+    let dir = env.home().join(".something");
+    fs::create_dir_all(dir.join("projects")).unwrap();
+    assert!(matches!(
+        inspect(&dir, &env.source(), None),
+        Err(AdoptError::NotAConfigDir(_))
+    ));
 }

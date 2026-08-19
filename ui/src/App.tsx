@@ -13,6 +13,7 @@ import { Adoptable } from "./Adoptable";
 import { AskSheet, type Ask } from "./Ask";
 import { Bindings } from "./Bindings";
 import { DefaultSession } from "./DefaultSession";
+import { ScriptEditor } from "./ScriptEditor";
 import { Health } from "./Health";
 import { PlanSheet } from "./PlanSheet";
 import { ProfileDetail, SWATCHES } from "./ProfileDetail";
@@ -30,6 +31,7 @@ export function App() {
   const [tab, setTab] = useState<Tab>("profiles");
   const [selected, setSelected] = useState<Detail | null>(null);
   const [showPlan, setShowPlan] = useState(false);
+  const [editingBase, setEditingBase] = useState(false);
   const [ask, setAsk] = useState<Ask | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -90,12 +92,13 @@ export function App() {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
       if (selected) setSelected(null);
+      else if (editingBase) setEditingBase(false);
       else if (showPlan) setShowPlan(false);
       else void api.hideWindow();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [selected, showPlan]);
+  }, [selected, editingBase, showPlan]);
 
   async function run(work: () => Promise<unknown>) {
     setBusy(true);
@@ -225,71 +228,8 @@ export function App() {
         </button>
       </div>
 
-      <div className="body" style={{ position: "relative" }}>
-        {error && <div className="error">{error}</div>}
-
-        {tab === "profiles" && (
-          <>
-            {profiles.length === 0 && adoptable.every((c) => c.taken) ? (
-              <div className="empty">
-                <h2>No profiles yet</h2>
-                <p>A profile is one Claude account, with its own login and its own command.</p>
-                <button className="btn primary" onClick={addProfile}>
-                  Add a profile
-                </button>
-              </div>
-            ) : (
-              profiles.map((profile) => (
-              <button
-                className="row"
-                key={profile.name}
-                style={{ ["--bar" as string]: profile.color ?? undefined }}
-                onClick={() => api.profile(profile.name).then(setSelected).catch((e) => setError(message(e)))}
-              >
-                <span className="bar" aria-hidden />
-                <span className="grow">
-                  <span className="name">{profile.name}</span>
-                  <span className="sub">
-                    <span className="mono">{profile.command}</span>
-                    {profile.model && <span>· {profile.model}</span>}
-                    {profile.adopted && <span>· in place</span>}
-                    {profile.description && <span className="trunc">· {profile.description}</span>}
-                  </span>
-                </span>
-                <span className="right">
-                  <span className="account">{profile.account ?? ""}</span>
-                  <span className="state">
-                    <span
-                      className={`dot ${!profile.applied ? "off" : profile.signedIn ? "ok" : "warn"}`}
-                      aria-hidden
-                    />
-                    <span>
-                      {!profile.applied ? "not built" : profile.signedIn ? "ready" : "signed out"}
-                    </span>
-                  </span>
-                </span>
-              </button>
-              ))
-            )}
-            {defaultSession && (
-              <DefaultSession session={defaultSession} onChanged={refresh} onError={setError} />
-            )}
-            <Adoptable candidates={adoptable} onAdopt={adoptDirectory} />
-          </>
-        )}
-
-        {tab === "directories" && (
-          <Bindings
-            bindings={bindings}
-            profiles={profiles}
-            onBind={bindDirectory}
-            onUnbind={(path) => run(() => api.unbind(path))}
-          />
-        )}
-
-        {tab === "health" && <Health checks={checks} />}
-
-        {selected && (
+      <div className="body">
+        {selected ? (
           <ProfileDetail
             detail={selected}
             onBack={() => setSelected(null)}
@@ -297,6 +237,95 @@ export function App() {
             onError={setError}
             onAsk={setAsk}
           />
+        ) : editingBase ? (
+          <ScriptEditor
+            profile={null}
+            onClose={() => setEditingBase(false)}
+            onError={setError}
+          />
+        ) : (
+          <>
+            {error && <div className="error">{error}</div>}
+
+            {tab === "profiles" && (
+              <>
+                {profiles.length === 0 && adoptable.every((c) => c.taken) ? (
+                  <div className="empty">
+                    <h2>No profiles yet</h2>
+                    <p>A profile is one Claude account, with its own login and its own command.</p>
+                    <button className="btn primary" onClick={addProfile}>
+                      Add a profile
+                    </button>
+                  </div>
+                ) : (
+                  profiles.map((profile) => (
+                    <button
+                      className="row"
+                      key={profile.name}
+                      style={{ ["--bar" as string]: profile.color ?? undefined }}
+                      onClick={() =>
+                        api
+                          .profile(profile.name)
+                          .then(setSelected)
+                          .catch((e) => setError(message(e)))
+                      }
+                    >
+                      <span className="bar" aria-hidden />
+                      <span className="grow">
+                        <span className="name">{profile.name}</span>
+                        <span className="sub">
+                          <span className="mono">{profile.command}</span>
+                          {profile.model && <span>· {profile.model}</span>}
+                          {profile.adopted && <span>· in place</span>}
+                          {profile.description && (
+                            <span className="trunc">· {profile.description}</span>
+                          )}
+                        </span>
+                      </span>
+                      <span className="right">
+                        <span className="account">{profile.account ?? ""}</span>
+                        <span className="state">
+                          <span
+                            className={`dot ${
+                              !profile.applied ? "off" : profile.signedIn ? "ok" : "warn"
+                            }`}
+                            aria-hidden
+                          />
+                          <span>
+                            {!profile.applied
+                              ? "not built"
+                              : profile.signedIn
+                                ? "ready"
+                                : "signed out"}
+                          </span>
+                        </span>
+                      </span>
+                    </button>
+                  ))
+                )}
+                {defaultSession && (
+                  <DefaultSession
+                    session={defaultSession}
+                    onChanged={refresh}
+                    onError={setError}
+                    onEdit={() => setEditingBase(true)}
+                  />
+                )}
+                <Adoptable candidates={adoptable} onAdopt={adoptDirectory} />
+              </>
+            )}
+
+            {tab === "directories" && (
+              <Bindings
+                bindings={bindings}
+                profiles={profiles}
+                onBind={bindDirectory}
+                onUnbind={(path) => run(() => api.unbind(path))}
+              />
+            )}
+
+            {tab === "health" && <Health checks={checks} />}
+          </>
         )}
       </div>
 

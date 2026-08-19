@@ -53,11 +53,36 @@ pub fn derive_name(dir: &Path) -> Option<String> {
     }
 }
 
+/// Written by Claude Code and by nothing else, so one is conclusive.
+const CONCLUSIVE: &[&str] = &[".claude.json"];
+
+/// Individually inconclusive — other tools keep a `settings.json` or a
+/// `projects/` too — so two are required together.
+const SUPPORTING: &[&str] = &[
+    "projects",
+    "history.jsonl",
+    "sessions",
+    "shell-snapshots",
+    "todos",
+    "statsig",
+    ".credentials.json",
+    "settings.json",
+];
+
 /// Whether `dir` carries the marks of a Claude config directory.
+///
+/// Deliberately strict: a home directory is full of dot-directories, and
+/// `~/.cursor` has a `projects/` while `~/.gemini` has a `settings.json`.
+/// Offering to adopt those as Claude profiles is worse than missing one.
 fn looks_like_config_dir(dir: &Path) -> bool {
-    [".claude.json", "settings.json", "projects"]
+    if CONCLUSIVE.iter().any(|entry| dir.join(entry).exists()) {
+        return true;
+    }
+    SUPPORTING
         .iter()
-        .any(|entry| dir.join(entry).exists())
+        .filter(|entry| dir.join(entry).exists())
+        .count()
+        >= 2
 }
 
 /// Inspect `dir` and decide how each resource should be treated.
