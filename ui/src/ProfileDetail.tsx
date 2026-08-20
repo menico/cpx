@@ -3,6 +3,7 @@ import type { ProfileDetail as Detail, ResourceMode } from "./api";
 import { api } from "./api";
 import type { Ask } from "./Ask";
 import { ScriptEditor } from "./ScriptEditor";
+import { Skills } from "./Skills";
 import { StatuslineControl } from "./StatuslineControl";
 
 /** Eight identity colours, spaced far enough apart to tell apart at 3px wide. */
@@ -43,6 +44,7 @@ interface Props {
 export function ProfileDetail({ detail, onBack, onChanged, onError, onAsk }: Props) {
   const { row } = detail;
   const [editing, setEditing] = useState(false);
+  const [managingSkills, setManagingSkills] = useState(false);
   const [model, setModel] = useState(row.model ?? "");
   const [description, setDescription] = useState(row.description);
 
@@ -61,6 +63,11 @@ export function ProfileDetail({ detail, onBack, onChanged, onError, onAsk }: Pro
   if (editing) {
     return (
       <ScriptEditor profile={row.name} onClose={() => setEditing(false)} onError={onError} />
+    );
+  }
+  if (managingSkills) {
+    return (
+      <Skills profile={row.name} onClose={() => setManagingSkills(false)} onError={onError} />
     );
   }
 
@@ -178,6 +185,19 @@ export function ProfileDetail({ detail, onBack, onChanged, onError, onAsk }: Pro
             onError={onError}
             onEdit={() => setEditing(true)}
           />
+        </div>
+
+        <div className="group">
+          <h3>Skills</h3>
+          <div className="field">
+            <label>Available</label>
+            <div className="value" style={{ fontFamily: "var(--sans)" }}>
+              its own and its plugins&apos;
+            </div>
+            <button className="btn small" onClick={() => setManagingSkills(true)}>
+              Manage…
+            </button>
+          </div>
         </div>
 
         <div className="group">

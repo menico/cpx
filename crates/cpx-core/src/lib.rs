@@ -1,3 +1,4 @@
+pub mod skills;
 pub mod statusline;
 pub mod default_session;
 pub mod env_path;

@@ -88,6 +88,31 @@ export interface Statusline {
   needsApply: boolean;
 }
 
+export interface Skill {
+  name: string;
+  description: string | null;
+  enabled: boolean;
+  path: string;
+}
+
+export interface PluginSkills {
+  /** The `plugin@marketplace` key used in settings. */
+  key: string;
+  plugin: string;
+  marketplace: string;
+  enabled: boolean;
+  skills: number;
+  names: string[];
+}
+
+export interface SkillInventory {
+  /** Skills the profile owns, enabled and disabled. */
+  own: Skill[];
+  plugins: PluginSkills[];
+  /** The skills directory is shared, so turning one off affects every profile. */
+  shared: boolean;
+}
+
 export interface StatuslineScript {
   path: string;
   contents: string;
@@ -149,6 +174,13 @@ const real = {
   setStatusline: (profile: string | null, label: string | null, refresh: number | null) =>
     invoke<void>("set_statusline", { profile, label, refresh }),
   clearStatusline: (profile: string | null) => invoke<void>("clear_statusline", { profile }),
+  skills: (profile: string) => invoke<SkillInventory>("skills", { profile }),
+  setSkillEnabled: (profile: string, skill: string, enabled: boolean) =>
+    invoke<void>("set_skill_enabled", { profile, skill, enabled }),
+  removeSkill: (profile: string, skill: string) =>
+    invoke<string>("remove_skill", { profile, skill }),
+  setPluginEnabled: (profile: string, key: string, enabled: boolean) =>
+    invoke<boolean>("set_plugin_enabled", { profile, key, enabled }),
   statuslineScript: (profile: string | null) =>
     invoke<StatuslineScript | null>("statusline_script", { profile }),
   saveStatuslineScript: (profile: string | null, contents: string) =>

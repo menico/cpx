@@ -6,6 +6,7 @@
 // absent, so the packaged app never reaches them.
 import type {
   AdoptionRow,
+  SkillInventory,
   DefaultSession,
   Statusline,
   StatuslineScript,
@@ -29,6 +30,56 @@ const RESOURCES: { resource: string; mode: ResourceMode; dir: boolean; json: boo
   { resource: "hooks", mode: "link", dir: true, json: false },
   { resource: "projects", mode: "own", dir: true, json: false },
 ];
+
+const SKILLS: SkillInventory = {
+  own: [
+    {
+      name: "adr-writer",
+      description: "Writes architecture decision records.",
+      enabled: true,
+      path: "/Users/you/.claude-profiles/work/skills/adr-writer",
+    },
+    {
+      name: "aws-cdk",
+      description: "Authors, deploys, and troubleshoots AWS infrastructure using CDK.",
+      enabled: true,
+      path: "/Users/you/.claude-profiles/work/skills/aws-cdk",
+    },
+    {
+      name: "noisy-helper",
+      description: "Suggests things nobody asked for.",
+      enabled: false,
+      path: "/Users/you/.claude-profiles/work/skills.disabled/noisy-helper",
+    },
+  ],
+  plugins: [
+    {
+      key: "superpowers@claude-plugins-official",
+      plugin: "superpowers",
+      marketplace: "claude-plugins-official",
+      enabled: true,
+      skills: 14,
+      names: ["brainstorming", "test-driven-development", "writing-plans"],
+    },
+    {
+      key: "posthog@claude-plugins-official",
+      plugin: "posthog",
+      marketplace: "claude-plugins-official",
+      enabled: true,
+      skills: 137,
+      names: ["querying-posthog-data", "investigating-error-issue"],
+    },
+    {
+      key: "figma@claude-plugins-official",
+      plugin: "figma",
+      marketplace: "claude-plugins-official",
+      enabled: false,
+      skills: 12,
+      names: ["figma-design-to-code"],
+    },
+  ],
+  shared: false,
+};
 
 const STATUSLINE: Statusline = {
   badge: false,
@@ -216,6 +267,10 @@ export const fixtures = {
   statusline: () => Promise.resolve(STATUSLINE),
   setStatusline: () => Promise.resolve(),
   clearStatusline: () => Promise.resolve(),
+  skills: () => Promise.resolve(SKILLS),
+  setSkillEnabled: () => Promise.resolve(),
+  removeSkill: () => Promise.resolve("/Users/you/.claude-profiles/work/skills.removed/x"),
+  setPluginEnabled: () => Promise.resolve(false),
   statuslineScript: () => Promise.resolve(SCRIPT),
   saveStatuslineScript: () => Promise.resolve(),
   forkStatuslineScript: () => Promise.resolve("/Users/you/.claude-profiles/work/custom-statusline.mjs"),

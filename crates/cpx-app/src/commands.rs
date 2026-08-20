@@ -265,6 +265,51 @@ pub fn clear_statusline(profile: Option<String>) -> Answer<()> {
     Ok(())
 }
 
+/// Every skill a profile has, from its own directory and from its plugins.
+#[tauri::command]
+pub fn skills(profile: String) -> Answer<cpx_core::skills::Inventory> {
+    let install = install()?;
+    cpx_core::skills::inventory(&install.config, &install.layout, &profile).map_err(err)
+}
+
+/// Switch one of the profile's own skills on or off.
+#[tauri::command]
+pub fn set_skill_enabled(profile: String, skill: String, enabled: bool) -> Answer<()> {
+    let install = install()?;
+    cpx_core::skills::set_enabled(&install.config, &install.layout, &profile, &skill, enabled)
+        .map_err(err)?;
+    Ok(())
+}
+
+/// Move a skill out of the profile, keeping a copy.
+#[tauri::command]
+pub fn remove_skill(profile: String, skill: String) -> Answer<String> {
+    let install = install()?;
+    let moved = cpx_core::skills::remove(&install.config, &install.layout, &profile, &skill)
+        .map_err(err)?;
+    Ok(moved.display().to_string())
+}
+
+/// Turn a whole plugin on or off for a profile.
+#[tauri::command]
+pub fn set_plugin_enabled(profile: String, key: String, enabled: bool) -> Answer<bool> {
+    let install = install()?;
+    let text = install.config_text().map_err(err)?;
+    let change = cpx_core::skills::set_plugin_enabled(
+        &install.config,
+        &install.layout,
+        &profile,
+        &key,
+        enabled,
+        &text,
+    )
+    .map_err(err)?;
+    if let Some(config_text) = &change.config_text {
+        install.write_config(config_text).map_err(err)?;
+    }
+    Ok(change.needs_apply)
+}
+
 /// The script behind a target's statusline, for editing.
 #[tauri::command]
 pub fn statusline_script(profile: Option<String>) -> Answer<Option<ScriptView>> {

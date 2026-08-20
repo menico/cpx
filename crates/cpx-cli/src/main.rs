@@ -101,6 +101,36 @@ enum Command {
     /// Show or change which statusline each profile uses.
     #[command(subcommand)]
     Statusline(StatuslineCommand),
+    /// List a profile's skills, and turn them on or off.
+    #[command(subcommand)]
+    Skills(SkillsCommand),
+}
+
+#[derive(Subcommand)]
+enum SkillsCommand {
+    /// List the skills a profile has, from its own directory and its plugins.
+    List {
+        profile: String,
+        /// Show every skill a plugin provides, not just the count.
+        #[arg(long)]
+        all: bool,
+    },
+    /// Switch a skill of your own back on.
+    Enable { profile: String, skill: String },
+    /// Switch a skill of your own off, keeping it in the profile.
+    Disable { profile: String, skill: String },
+    /// Move a skill out of the profile, keeping a copy.
+    Remove { profile: String, skill: String },
+    /// Turn a whole plugin on or off for a profile.
+    Plugin {
+        profile: String,
+        /// The `plugin@marketplace` key, as `cpx skills list` shows it.
+        key: String,
+        #[arg(long, conflicts_with = "on")]
+        off: bool,
+        #[arg(long)]
+        on: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -168,6 +198,24 @@ fn run() -> Result<()> {
         Command::Run { profile, args } => cmd_run(&profile, &args),
         Command::Clone { from, to } => cmd_clone(&from, &to),
         Command::Adopt { dir, name } => cmd_adopt(dir, name.as_deref(), cli.json),
+        Command::Skills(SkillsCommand::List { profile, all }) => {
+            cmd_skills_list(&profile, all, cli.json)
+        }
+        Command::Skills(SkillsCommand::Enable { profile, skill }) => {
+            cmd_skills_set(&profile, &skill, true)
+        }
+        Command::Skills(SkillsCommand::Disable { profile, skill }) => {
+            cmd_skills_set(&profile, &skill, false)
+        }
+        Command::Skills(SkillsCommand::Remove { profile, skill }) => {
+            cmd_skills_remove(&profile, &skill)
+        }
+        Command::Skills(SkillsCommand::Plugin {
+            profile,
+            key,
+            off,
+            on,
+        }) => cmd_skills_plugin(&profile, &key, on || !off),
         Command::Statusline(StatuslineCommand::Show) => cmd_statusline_show(cli.json),
         Command::Statusline(StatuslineCommand::Set {
             profile,
@@ -655,6 +703,100 @@ fn cmd_run(profile: &str, args: &[String]) -> Result<()> {
     Err(std::process::Command::new(&wrapper).args(args).exec().into())
 }
 
+fn cmd_skills_list(profile: &str, all: bool, as_json: bool) -> Result<()> {
+    let session = Session::load()?;
+    let inventory = cpx_core::skills::inventory(&session.config, &session.layout, profile)?;
+
+    if as_json {
+        println!("{}", serde_json::to_string_pretty(&inventory)?);
+        return Ok(());
+    }
+
+    if inventory.own.is_empty() {
+        println!("{profile} has no skills of its own.");
+    } else {
+        println!("Skills in this profile:");
+        for skill in &inventory.own {
+            let mark = if skill.enabled { " " } else { "off" };
+            let description = skill.description.clone().unwrap_or_default();
+            println!("  {mark:<4} {:<28} {}", skill.name, clip(&description, 48));
+        }
+    }
+
+    if inventory.shared {
+        println!();
+        println!("This profile shares its skills directory with the others, so turning one");
+        println!("off here turns it off everywhere. Give it its own copy first if that");
+        println!("is not what you want.");
+    }
+
+    let with_skills: Vec<_> = inventory.plugins.iter().filter(|p| p.skills > 0).collect();
+    if !with_skills.is_empty() {
+        let total: usize = with_skills.iter().map(|p| p.skills).sum();
+        println!();
+        println!("From plugins ({total} skills):");
+        for plugin in with_skills {
+            let mark = if plugin.enabled { " " } else { "off" };
+            let noun = if plugin.skills == 1 { "skill" } else { "skills" };
+            println!("  {mark:<4} {:<28} {} {noun}", plugin.key, plugin.skills);
+            if all {
+                for name in &plugin.names {
+                    println!("       {name}");
+                }
+            }
+        }
+        if !all {
+            println!();
+            println!("`cpx skills list {profile} --all` lists what each plugin provides.");
+        }
+    }
+    Ok(())
+}
+
+fn cmd_skills_set(profile: &str, skill: &str, enabled: bool) -> Result<()> {
+    let session = Session::load()?;
+    let moved =
+        cpx_core::skills::set_enabled(&session.config, &session.layout, profile, skill, enabled)?;
+    if enabled {
+        println!("{skill} is on again.");
+    } else {
+        println!("{skill} is off. It is still here, at {}", moved.display());
+    }
+    Ok(())
+}
+
+fn cmd_skills_remove(profile: &str, skill: &str) -> Result<()> {
+    let session = Session::load()?;
+    let moved = cpx_core::skills::remove(&session.config, &session.layout, profile, skill)?;
+    println!("Removed {skill} from {profile}.");
+    println!("Kept at {} — delete it yourself when you are sure.", moved.display());
+    Ok(())
+}
+
+fn cmd_skills_plugin(profile: &str, key: &str, enabled: bool) -> Result<()> {
+    let session = Session::load()?;
+    let text = std::fs::read_to_string(session.layout.config_file())?;
+    let change = cpx_core::skills::set_plugin_enabled(
+        &session.config,
+        &session.layout,
+        profile,
+        key,
+        enabled,
+        &text,
+    )?;
+    if let Some(config_text) = &change.config_text {
+        std::fs::write(session.layout.config_file(), config_text)?;
+    }
+    println!(
+        "{key} is {} for {profile}.",
+        if enabled { "on" } else { "off" }
+    );
+    if change.needs_apply {
+        println!("Run `cpx apply` to regenerate the profile's settings.");
+    }
+    Ok(())
+}
+
 /// Resolve the profile/--base pair into one target.
 fn statusline_target(profile: Option<&str>, base: bool) -> Result<cpx_core::statusline::Target> {
     use cpx_core::statusline::Target;
@@ -664,6 +806,16 @@ fn statusline_target(profile: Option<&str>, base: bool) -> Result<cpx_core::stat
         (None, true) => Ok(Target::Base),
         (None, false) => bail!("which statusline? name a profile, or pass --base"),
     }
+}
+
+/// Shorten prose, keeping the start. `brief` keeps the tail, which is right
+/// for a path and wrong for a sentence.
+fn clip(text: &str, width: usize) -> String {
+    if text.chars().count() <= width {
+        return text.to_string();
+    }
+    let head: String = text.chars().take(width.saturating_sub(1)).collect();
+    format!("{}…", head.trim_end())
 }
 
 /// Shorten a command for display without hiding which script it runs.

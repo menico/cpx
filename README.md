@@ -196,6 +196,31 @@ There is nothing to open when the statusline is a command with no file behind
 it, such as `npx something` or a binary on `PATH`; the app says so rather than
 guessing.
 
+## Skills
+
+Skills reach a profile two ways, and the two have different switches.
+
+```bash
+cpx skills list work           # your own, plus what each plugin brings
+cpx skills list work --all     # naming every skill a plugin provides
+cpx skills disable work noisy  # move it out of skills/, keeping it
+cpx skills enable work noisy
+cpx skills remove work noisy   # move it to skills.removed/, still not deleted
+cpx skills plugin work posthog@claude-plugins-official --off
+```
+
+Skills of your own are directories under `<config>/skills/`, and Claude loads
+whatever it finds there — so switching one off means moving it to
+`skills.disabled/` in the same profile. Nothing is deleted, and enabling moves
+it back.
+
+Plugin skills come with their plugin, and `enabledPlugins` only toggles a whole
+plugin. That is the granularity offered rather than pretending otherwise: one
+plugin can easily bring a hundred skills.
+
+Where `skills/` is shared between profiles — the `link` mode — turning a skill
+off turns it off everywhere, so that is called out before you do it.
+
 ## Per-directory profiles
 
 `cpx bind <profile>` writes a marker-delimited block into that directory's
@@ -248,6 +273,7 @@ claude-work auth login
 | `cpx clone <from> <to>` | duplicate a profile's config, without credentials |
 | `cpx adopt [dir]` | manage a config directory you already have, in place |
 | `cpx statusline show\|set\|clear` | profile badge in front of an existing statusline |
+| `cpx skills list\|enable\|disable\|remove\|plugin` | what a profile can call on |
 | `cpx --version` | the installed version |
 | `cpx profile add\|rm <name>` | edit the config, preserving comments |
 
@@ -293,7 +319,7 @@ no decision the CLI does not.
 ## Development
 
 ```bash
-make test    # 368 Rust tests, clippy with warnings denied, and a UI typecheck
+make test    # 396 Rust tests, clippy with warnings denied, and a UI typecheck
 make dev     # the app against a live UI
 ```
 

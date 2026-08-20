@@ -683,3 +683,74 @@ select { cursor: default; padding-right: 22px; }
 }
 
 .editor-foot .grow { flex: 1; }
+
+/* ---------- skills ---------- */
+
+.skill {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.skill:last-child { border-bottom: 0; }
+.skill .grow { flex: 1; min-width: 0; }
+
+.skill-actions {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.skill-name {
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+/* A skill that is off is still listed: it has not gone anywhere. */
+.skill-name.off {
+  color: var(--muted);
+  text-decoration: line-through;
+  text-decoration-thickness: 1px;
+}
+
+.skill-desc {
+  margin-top: 1px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.skill-desc.link {
+  appearance: none;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  font: inherit;
+  color: var(--muted);
+  cursor: default;
+  text-align: left;
+}
+
+.skill-desc.link:hover { color: var(--ink-soft); }
+
+.skill-names {
+  margin-top: 3px;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--muted);
+  line-height: 1.4;
+  word-break: break-word;
+}
+
+.group > .hint .mono { font-family: var(--mono); font-size: 11px; }
+
+.group > .hint {
+  margin: -2px 0 8px;
+  color: var(--muted);
+  font-size: 11.5px;
+  line-height: 1.4;
+}
