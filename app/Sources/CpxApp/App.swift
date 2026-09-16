@@ -50,7 +50,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if let paths = try? await cli.paths() {
                 state.watchConfig(at: paths.config)
             }
-            await state.refreshUsage(manual: true)
+            // A launch is nobody clicking anything: never a Keychain dialog.
+            await state.refreshUsage(manual: false)
             if settings.notificationsEnabled {
                 notifier.requestAuthorisation()
             }

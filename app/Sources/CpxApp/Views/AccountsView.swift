@@ -85,7 +85,9 @@ struct AccountCard: View {
                     if let usage = account.usage, let error = usage.error {
                         HStack(spacing: 6) {
                             StatusDot(tone: .warn)
-                            if error.needsKeychainPermission {
+                            if error.needsKeychainPermission, state.settings.keychainPrompts == .never {
+                                Text("Usage not read: Keychain access is off in Settings.").font(.caption).foregroundStyle(.secondary)
+                            } else if error.needsKeychainPermission {
                                 Text("Needs permission to read this login.").font(.caption).foregroundStyle(.secondary)
                                 Spacer()
                                 Button("Allow…") {

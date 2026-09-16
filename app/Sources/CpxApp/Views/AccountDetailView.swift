@@ -112,7 +112,10 @@ struct AccountDetailView: View {
         if let usage = account.usage, let error = usage.error {
             HStack(alignment: .top, spacing: 6) {
                 StatusDot(tone: .warn).padding(.top, 5)
-                if error.needsKeychainPermission {
+                if error.needsKeychainPermission, state.settings.keychainPrompts == .never {
+                    Text("Usage is not read for Claude accounts because Keychain access is off in Settings. Spend still comes from the transcripts.")
+                        .font(.callout).foregroundStyle(.secondary)
+                } else if error.needsKeychainPermission {
                     Text("cpx has not been allowed to read this login yet. Allowing asks macOS once; choose Always Allow so it is not asked again.")
                         .font(.callout).foregroundStyle(.secondary)
                     Spacer()

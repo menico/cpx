@@ -172,7 +172,7 @@ struct MainView: View {
                             let force = state.plan.requiresForce
                             _ = await state.perform { _ = try await state.cli.apply(force: force, sync: false) }
                             showPlan = false
-                            await state.refreshUsage(manual: true)
+                            await state.refreshUsage(manual: false)
                         }
                     }
                     .buttonStyle(.borderedProminent)

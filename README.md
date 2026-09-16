@@ -330,7 +330,17 @@ so the first time macOS asks whether cpx may; *Always Allow* makes later
 reads silent. Nothing is written back, and nothing is refreshed — a Claude
 token that has expired is reported with the fix (run the profile once), and a
 stale Codex token is refreshed by `codex app-server` itself, which cpx asks
-instead. Set `CPX_NO_KEYCHAIN=1` to never be asked.
+instead. Codex needs no permission at all: its login is a file.
+
+Two things make the question come back. Claude Code rewrites its Keychain
+item when it refreshes the token, which drops every grant on it. And an
+ad-hoc signed build is known to macOS only by its hash, so each new build is
+a stranger; set `CPX_SIGN_IDENTITY` to a certificate of yours when running
+`make app` or a release and the app keeps one identity across builds. In the app,
+background refreshes never ask — an account cpx may not read shows an *Allow*
+button instead — and Settings can turn the question off entirely, in which
+case Claude accounts show spend but no usage bars. `cpx usage --no-prompt`
+and `CPX_NO_KEYCHAIN=1` do the same for the command.
 
 ```
 work           claude   me@example.com (Max 5x)

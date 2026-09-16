@@ -38,7 +38,20 @@ fi
 sed "s/__VERSION__/$VERSION/g" "$HERE/Bundle/Info.plist" > "$BUNDLE/Contents/Info.plist"
 printf 'APPL????' > "$BUNDLE/Contents/PkgInfo"
 
-# Ad-hoc signing is enough for the machine that built it. A build meant for
-# anyone else needs a Developer ID and notarisation.
-codesign --force --deep --sign - "$BUNDLE" >&2
+# Ad-hoc signing is enough for the machine that built it. An ad-hoc
+# signature is identified by a hash of the binary, though, so macOS treats
+# every build as a new app and asks for Keychain access all over again. Set
+# CPX_SIGN_IDENTITY to a certificate of your choosing (a name or a SHA-1 from
+# `security find-identity -v -p codesigning`) to give the app one identity
+# across builds, so "Always Allow" sticks. Nothing is chosen for you.
+IDENTITY="${CPX_SIGN_IDENTITY:-}"
+if [[ -n "$IDENTITY" ]]; then
+  echo "signing as $IDENTITY" >&2
+  codesign --force --timestamp=none --identifier io.github.menico.cpx.cli --sign "$IDENTITY" "$BUNDLE/Contents/MacOS/cpx" >&2
+  codesign --force --deep --timestamp=none --sign "$IDENTITY" "$BUNDLE" >&2
+  # codesign reports a key it could not use with exit 0; check the result.
+  codesign -dvv "$BUNDLE" 2>&1 | grep -q "^Signature=adhoc" && { echo "signing with $IDENTITY did not take (is its key usable from a terminal?)" >&2; exit 1; }
+else
+  codesign --force --deep --sign - "$BUNDLE" >&2
+fi
 echo "$BUNDLE"

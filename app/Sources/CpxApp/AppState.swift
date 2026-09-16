@@ -171,7 +171,7 @@ final class AppState {
 
     func initialise() async {
         _ = await perform { try await cli.initialise() }
-        await refreshUsage(manual: true)
+        await refreshUsage(manual: false)
     }
 
     // MARK: - Usage
