@@ -1,9 +1,8 @@
 target/
 .DS_Store
-node_modules/
-ui/dist/
+app/.build/
+app/Package.resolved
 .playwright-mcp/
 
 *.png
-!crates/cpx-app/icons/*.png
-!ui/public/*.png
+!app/Bundle/cpx-icon.png

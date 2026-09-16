@@ -1,8 +1,10 @@
-# cpx — Claude profile manager
+# cpx — Claude Code and Codex profile manager
 
-Run several Claude Code accounts on one machine. Each profile gets its own
-config directory, its own login, its own command, and can be bound to a
-directory so the right account is used automatically.
+Run several Claude Code and Codex accounts on one machine. Each profile gets
+its own config directory, its own login, its own command, and can be bound to
+a directory so the right account is used automatically. A menu bar app shows
+every account's rate limits, when they reset, and what its transcripts have
+cost.
 
 Per-profile MCP servers need nothing extra: they live in the config directory,
 so each profile already has its own. Settings sync across machines is
@@ -29,8 +31,8 @@ brew upgrade cpx             # the command
 brew upgrade --cask cpx-app  # the app
 ```
 
-The app lives in the menu bar, not the Dock. To start it at login, add it
-under System Settings → General → Login Items.
+The app lives in the menu bar, not the Dock. Its settings have a switch to
+start it at login.
 
 The app is ad-hoc signed rather than notarised. The cask clears the quarantine
 flag for you, so it opens without a right-click.
@@ -49,22 +51,26 @@ comes first on `PATH` wins, which is rarely the one you meant.
 
 ```bash
 cpx init --profile work --profile personal
+cpx profile add gpt --provider codex
 cpx apply
 
 claude-work auth login        # sign each profile in once
 claude-personal auth login
+codex-gpt login
 
 cd ~/Work/some-project
-cpx bind work                 # this directory now uses `work`
+cpx bind work                 # this directory now uses `work` for Claude
+cpx bind gpt                  # and `gpt` for Codex
 ```
 
-Inside a bound directory, the plain `claude` command *is* that profile —
-there is no separate command to remember.
+Inside a bound directory, the plain `claude` and `codex` commands *are* those
+profiles — there is no separate command to remember.
 
 ## How it works
 
-Each profile is a directory under `~/.claude-profiles/<name>/` used as
-`CLAUDE_CONFIG_DIR`. What goes into it is declared per resource:
+Each profile is a directory under `~/.claude-profiles/<name>/`, used as
+`CLAUDE_CONFIG_DIR` for a Claude profile or `CODEX_HOME` for a Codex one.
+What goes into it is declared per resource:
 
 | Mode | Behaviour |
 |---|---|
@@ -76,7 +82,9 @@ Each profile is a directory under `~/.claude-profiles/<name>/` used as
 
 `merge` is what lets a profile override part of `settings.json` — a model, a
 statusline, permissions — while the rest of your base settings keep flowing
-through. There is no drift to reconcile, because the file is derived.
+through. There is no drift to reconcile, because the file is derived. For a
+Codex profile the same applies to `config.toml`: the MCP servers and trusted
+projects come from `~/.codex`, and the profile's patch sits on top.
 
 ```toml
 # ~/.claude-profiles/config.toml
@@ -99,7 +107,34 @@ env         = { ANTHROPIC_LOG = "debug" }
 [profiles.work.resources.settings]
 mode  = "merge"
 patch = { statusLine = { type = "command", command = "echo work" } }
+
+[profiles.gpt]
+provider = "codex"
+model    = "gpt-5.5"
+
+[profiles.gpt.resources.config]
+mode  = "merge"
+patch = { model_reasoning_effort = "high" }
 ```
+
+### Codex profiles
+
+`provider = "codex"` makes a profile a Codex home. Its command is
+`codex-<name>`, its shim is `codex`, and it is built from `~/.codex` (set
+`[codex] source_dir` to change that). The resources it knows are the ones a
+Codex home has:
+
+| Key | File | Default |
+|---|---|---|
+| `config` | `config.toml` | `merge` |
+| `AGENTS.md` | `AGENTS.md` | `copy` |
+| `skills`, `prompts`, `rules`, `hooks`, `plugins` | directories | `link` |
+| `hooks_json` | `hooks.json` | `copy` |
+| `memories`, `sessions` | directories | `own` |
+
+The top-level `source_dir` and `[defaults.resources]` are Claude's, so a
+config written before Codex support reads exactly as it did. Codex defaults
+live under `[codex.defaults.resources]`.
 
 ## Nothing happens without a plan
 
@@ -133,8 +168,8 @@ converges to nothing.
 
 ## Adopting what you already have
 
-If you already run Claude accounts by hand out of `~/.claude-work`,
-`~/.claude-personal` and so on, cpx manages them where they are:
+If you already run Claude or Codex accounts by hand out of `~/.claude-work`,
+`~/.codex-work` and so on, cpx manages them where they are:
 
 ```bash
 cpx adopt                      # lists what it found, and what each would keep
@@ -239,17 +274,36 @@ restores the original file exactly, and removes the `.envrc` if it only ever
 held our block. The `.envrc` is ignored through `.git/info/exclude`, which is
 local to your clone — never `.gitignore`, which is shared with everyone else.
 
-`cpx bindings` lists every bound directory and flags ones that have gone
-stale: directory deleted, profile removed, block hand-edited, direnv not
+A directory can hold one profile per tool. Binding a Codex profile beside a
+Claude one adds it to the same block:
+
+```sh
+# >>> cpx: work, gpt >>>
+# Claude Code: profile work
+export CLAUDE_CONFIG_DIR='/Users/you/.claude-profiles/work'
+export CLAUDE_PROFILE='work'
+PATH_add '/Users/you/.claude-profiles/work/bin'
+# Codex: profile gpt
+export CODEX_HOME='/Users/you/.claude-profiles/gpt'
+export CODEX_PROFILE='gpt'
+PATH_add '/Users/you/.claude-profiles/gpt/bin'
+# <<< cpx <<<
+```
+
+`cpx unbind --provider codex` takes one of them out; `cpx unbind` takes the
+block out. `cpx bindings` lists every bound directory and flags ones that have
+gone stale: directory deleted, profile removed, block hand-edited, direnv not
 allowed.
 
 ## Credentials
 
-cpx never reads a token. On macOS the login lives in the Keychain under
+Everything but `cpx usage` works from the *existence* of a login, never its
+value. On macOS a Claude login lives in the Keychain under
 `Claude Code-credentials-<sha256(config_dir)[..8]>`, so profiles cannot
-collide with each other or with your default `~/.claude` session. The
+collide with each other or with your default `~/.claude` session; the
 existence probe deliberately omits `security -w`, so nothing is returned and
-macOS shows no access prompt.
+macOS shows no access prompt. A Codex login is the `auth.json` in its home,
+which is read for the account name and plan and nothing else.
 
 Switching an account always goes through that profile's own command:
 
@@ -257,7 +311,42 @@ Switching an account always goes through that profile's own command:
 claude-work auth status
 claude-work auth logout    # touches only the work entry
 claude-work auth login
+codex-gpt login
 ```
+
+## Usage and spend
+
+```bash
+cpx usage                  # every account's rate limits, and when they reset
+cpx usage work @codex      # named profiles; @claude and @codex are the default sessions
+cpx cost                   # what the local transcripts would cost at list prices
+cpx cost --days 90 --json
+```
+
+`cpx usage` is the one command that reads a token: it asks the same endpoint
+each tool asks for its own `/usage` screen, and forgets the token when the
+request is done. For a Claude profile that means reading its Keychain item,
+so the first time macOS asks whether cpx may; *Always Allow* makes later
+reads silent. Nothing is written back, and nothing is refreshed — a Claude
+token that has expired is reported with the fix (run the profile once), and a
+stale Codex token is refreshed by `codex app-server` itself, which cpx asks
+instead. Set `CPX_NO_KEYCHAIN=1` to never be asked.
+
+```
+work           claude   me@example.com (Max 5x)
+  Session                 12.5% used   resets in 3h 12m
+  Weekly                  40.0% used   resets in 4d 2h
+  Opus weekly              3.2% used   resets in 4d 2h
+```
+
+`cpx cost` reads the transcripts each tool already writes — Claude's
+`projects/*.jsonl`, Codex's `sessions/**/rollout-*.jsonl` — and prices the
+tokens at published list prices. A subscription is not billed per token, so
+this is what the usage would have cost on the API rather than a bill; it is
+still the most honest measure of how much each account is doing. Models the
+price table does not know are reported as unpriced, never as free. Per-file
+results are cached under `~/.claude-profiles/cache/`, so only changed
+transcripts are re-read.
 
 ## Commands
 
@@ -272,12 +361,15 @@ claude-work auth login
 | `cpx run <profile> -- <args>` | one-shot under a profile |
 | `cpx clone <from> <to>` | duplicate a profile's config, without credentials |
 | `cpx adopt [dir]` | manage a config directory you already have, in place |
-| `cpx statusline show\|set\|clear` | profile badge in front of an existing statusline |
+| `cpx statusline show\|set\|clear\|script` | profile badge in front of an existing statusline, and the script behind it |
 | `cpx skills list\|enable\|disable\|remove\|plugin` | what a profile can call on |
+| `cpx usage [account…]` | rate limits and resets, live from each provider |
+| `cpx cost [account…] [--days N]` | spend estimated from local transcripts |
+| `cpx paths` | where the configuration lives |
 | `cpx --version` | the installed version |
-| `cpx profile add\|rm <name>` | edit the config, preserving comments |
+| `cpx profile add [--provider codex]\|rm\|set\|resource` | edit the config, preserving comments |
 
-Every read command takes `--json`.
+Every command takes `--json`; that is the interface the app uses.
 
 `cpx doctor` exits non-zero when something is genuinely broken. It also
 catches the quiet one: a `CLAUDE_CONFIG_DIR` left set in your shell, which
@@ -285,12 +377,14 @@ overrides whichever profile you think you are using.
 
 ## Notes
 
-- **`~/.claude` is shown but never managed.** It is the directory profiles
-  inherit from, and usually a working account in its own right, so `cpx list`
-  and the app report which account it is signed into and leave it alone.
-- **Existing `~/.claude-*` directories are adopted in place, not moved.** A
-  login is keyed to its config directory's path, so `cpx adopt` manages the
-  directory where it already sits and you never sign in again.
+- **`~/.claude` and `~/.codex` are shown but never managed.** They are the
+  directories profiles inherit from, and usually working accounts in their
+  own right, so `cpx list` and the app report which account each is signed
+  into and leave them alone.
+- **Existing `~/.claude-*` and `~/.codex-*` directories are adopted in
+  place, not moved.** A login is keyed to its directory's path, so
+  `cpx adopt` manages the directory where it already sits and you never sign
+  in again.
 - **Wrapper name collisions are refused, not resolved.** If
   `~/.local/bin/claude-<name>` exists and cpx did not write it, apply stops.
 - Wrappers exec Claude by absolute path, so a wrapper directory earlier on
@@ -299,29 +393,51 @@ overrides whichever profile you think you are using.
 ## The menu-bar app
 
 ```bash
-make dev     # runs the app against a live UI
-make app     # builds cpx.app and a .dmg
+make app     # builds target/app/cpx.app
+make dev     # runs it with the popover open
 ```
 
-It lives in the menu bar: click the icon for a popover listing every profile,
-which account it is signed into, and whether it is built. Each profile carries
-an identity colour, and that colour is the through-line — it marks the profile
-in the list and every directory bound to it, so colour always answers "which
-account".
+A native Swift app, in the spirit of [CodexBar](https://github.com/steipete/CodexBar)
+but built around profiles. The menu bar icon is a small meter — session lane
+above, weekly below, filled by what remains — for the account closest to a
+limit, or the one you pin, or one icon per account. Click it for the popover:
+
+- **Accounts.** Every profile and each tool's default session, with its
+  session and weekly bars, reset countdowns, plan, and today / 7-day / 30-day
+  spend. Open one for every limit, extra usage, credits, spend by model and by
+  day, and the profile's configuration: name, colour, model, sign in and out,
+  statusline badge, skills, what it inherits and how, duplicate, remove.
+- **Directories.** What is bound where, and to which profile of each tool.
+- **Health.** The same checks as `cpx doctor`.
 
 Pending changes never apply silently. The footer shows a count; expanding it
-shows the real plan, with the same three-state gutter the CLI prints, so the
-app and the terminal never describe a change differently.
+shows the real plan, with the same gutter the CLI prints, so the app and the
+terminal never describe a change differently.
 
-The app is a second consumer of `cpx-core`, not a reimplementation: it makes
-no decision the CLI does not.
+Usage refreshes on an adaptive cadence — every two minutes while you are
+looking, every half hour when you are not, slower on battery — or on a fixed
+interval, or by hand. Notifications say when a window's remaining share
+crosses a threshold (50% and 20% by default, once each, re-armed on
+recovery), when a session runs out and when it is back, and optionally when a
+week resets. Provider incidents from the Anthropic and OpenAI status pages
+show as a dot on the icon.
+
+The app makes no decision the command does not: everything it shows is a
+`cpx … --json` call, and everything it changes is the matching subcommand.
+The command ships inside the app bundle so the two can never disagree.
 
 ## Development
 
 ```bash
-make test    # 396 Rust tests, clippy with warnings denied, and a UI typecheck
-make dev     # the app against a live UI
+make test    # the Rust suite, clippy with warnings denied, and the Swift tests
+make dev     # the app with its popover open
 ```
+
+`cpx-core` holds every decision and knows nothing about terminals or
+windows; `cpx-cli` is argument parsing and rendering; `app/` is a Swift
+package whose `CpxKit` library holds the contract with the command, the
+refresh policy and the alert logic, and whose `CpxApp` target is the menu bar
+app.
 
 Releases are cut locally rather than in CI, so they can be rehearsed:
 
@@ -330,16 +446,8 @@ make release-dry VERSION=0.2.0   # build everything, publish nothing
 make release VERSION=0.2.0       # publish, and point the tap at it
 ```
 
-Opening `ui` in a plain browser (`pnpm --dir ui dev`) runs the interface
-against fixtures, so the frontend can be built and reviewed without launching
-the desktop shell.
-
-`cpx-core` holds every decision and knows nothing about terminals;
-`cpx-cli` is argument parsing and rendering. The desktop app will be a second
-consumer of the same API.
-
 Drive the CLI against a throwaway installation with `CPX_HOME` and
-`CPX_ROOT`.
+`CPX_ROOT`. Point the app at a different command with `CPX_CLI`.
 
 ## License
 
