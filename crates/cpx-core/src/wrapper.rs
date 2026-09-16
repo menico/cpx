@@ -1,6 +1,7 @@
-//! Generation of the `claude-<profile>` wrapper and the per-profile shim.
+//! Generation of the `claude-<profile>` / `codex-<profile>` wrapper and the
+//! per-profile shim.
 
-use crate::config::Profile;
+use crate::config::{Profile, Provider};
 use std::path::Path;
 
 /// Claude Code subcommands that manage the installation itself. These exec
@@ -20,13 +21,36 @@ pub const PASSTHROUGH_SUBCOMMANDS: &[&str] = &[
     "plugins",
 ];
 
+/// The same for Codex: subcommands that take no session flags.
+pub const CODEX_PASSTHROUGH_SUBCOMMANDS: &[&str] = &[
+    "login",
+    "logout",
+    "mcp",
+    "mcp-server",
+    "app-server",
+    "apply",
+    "completion",
+    "features",
+    "debug",
+    "cloud",
+    "sandbox",
+    "help",
+];
+
+pub fn passthrough_subcommands(provider: Provider) -> &'static [&'static str] {
+    match provider {
+        Provider::Claude => PASSTHROUGH_SUBCOMMANDS,
+        Provider::Codex => CODEX_PASSTHROUGH_SUBCOMMANDS,
+    }
+}
+
 pub struct WrapperContext<'a> {
     pub name: &'a str,
     pub profile: &'a Profile,
     pub profile_dir: &'a Path,
-    /// The real Claude binary, resolved at plan time and exec'd by absolute
-    /// path so a wrapper in `bin_dir` can never recurse into itself.
-    pub claude_binary: &'a Path,
+    /// The real Claude or Codex binary, resolved at plan time and exec'd by
+    /// absolute path so a wrapper in `bin_dir` can never recurse into itself.
+    pub binary: &'a Path,
 }
 
 /// Quote a value for safe interpolation into shell source.
@@ -42,37 +66,58 @@ fn quote_path(path: &Path) -> String {
     sh_quote(&path.to_string_lossy())
 }
 
-/// The `claude-<profile>` wrapper installed into `bin_dir`.
+/// The `<prefix><profile>` wrapper installed into `bin_dir`.
 pub fn wrapper_script(ctx: &WrapperContext) -> String {
     use std::fmt::Write;
+    let provider = ctx.profile.provider;
     let mut s = String::new();
 
     writeln!(s, "#!/usr/bin/env bash").unwrap();
     writeln!(s, "{}", crate::state::MARKER).unwrap();
     if ctx.profile.description.is_empty() {
-        writeln!(s, "# Profile: {}", ctx.name).unwrap();
+        writeln!(s, "# Profile: {} ({})", ctx.name, provider.display_name()).unwrap();
     } else {
-        writeln!(s, "# Profile: {} — {}", ctx.name, ctx.profile.description).unwrap();
+        writeln!(
+            s,
+            "# Profile: {} ({}) — {}",
+            ctx.name,
+            provider.display_name(),
+            ctx.profile.description
+        )
+        .unwrap();
     }
     writeln!(s, "#\n# Edit ~/.claude-profiles/config.toml and run `cpx apply`;").unwrap();
     writeln!(s, "# changes made here are overwritten.").unwrap();
     writeln!(s, "set -euo pipefail\n").unwrap();
 
+    let prefixes = provider.scrubbed_env_prefixes();
     writeln!(
         s,
-        "# Drop inherited CLAUDE_*/ANTHROPIC_* variables so a parent shell cannot\n         # redirect this profile at a different account."
+        "# Drop inherited {} variables so a parent shell cannot\n# redirect this profile at a different account.",
+        prefixes
+            .iter()
+            .map(|p| format!("{p}*"))
+            .collect::<Vec<_>>()
+            .join("/")
     )
     .unwrap();
     writeln!(s, "while IFS= read -r __cpx_var; do").unwrap();
     writeln!(s, "  unset \"$__cpx_var\"").unwrap();
     writeln!(
         s,
-        "done < <(compgen -v | grep -E '^(CLAUDE_|ANTHROPIC_)' || true)\n"
+        "done < <(compgen -v | grep -E '^({})' || true)\n",
+        prefixes.join("|")
     )
     .unwrap();
 
-    writeln!(s, "export CLAUDE_CONFIG_DIR={}", quote_path(ctx.profile_dir)).unwrap();
-    writeln!(s, "export CLAUDE_PROFILE={}", sh_quote(ctx.name)).unwrap();
+    writeln!(
+        s,
+        "export {}={}",
+        provider.home_env_var(),
+        quote_path(ctx.profile_dir)
+    )
+    .unwrap();
+    writeln!(s, "export {}={}", provider.profile_env_var(), sh_quote(ctx.name)).unwrap();
     // Read by a generated statusline badge, so one badge script can colour
     // itself for whichever profile is running.
     if let Some(color) = &ctx.profile.color {
@@ -83,7 +128,7 @@ pub fn wrapper_script(ctx: &WrapperContext) -> String {
     }
     writeln!(s).unwrap();
 
-    writeln!(s, "__cpx_claude={}\n", quote_path(ctx.claude_binary)).unwrap();
+    writeln!(s, "__cpx_bin={}\n", quote_path(ctx.binary)).unwrap();
 
     writeln!(
         s,
@@ -93,8 +138,8 @@ pub fn wrapper_script(ctx: &WrapperContext) -> String {
     writeln!(s, "case \"${{1:-}}\" in").unwrap();
     writeln!(
         s,
-        "  {}) exec \"$__cpx_claude\" \"$@\" ;;",
-        PASSTHROUGH_SUBCOMMANDS.join("|")
+        "  {}) exec \"$__cpx_bin\" \"$@\" ;;",
+        passthrough_subcommands(provider).join("|")
     )
     .unwrap();
     writeln!(s, "esac\n").unwrap();
@@ -104,9 +149,15 @@ pub fn wrapper_script(ctx: &WrapperContext) -> String {
         flags.push_str(&format!(" --add-dir {}", quote_path(dir)));
     }
 
+    // Codex spells the flag `-m` as well as `--model`; Claude only the latter.
+    let model_patterns = match provider {
+        Provider::Claude => "--model|--model=*",
+        Provider::Codex => "-m|--model|--model=*",
+    };
+
     match &ctx.profile.model {
         None => {
-            writeln!(s, "exec \"$__cpx_claude\"{flags} \"$@\"").unwrap();
+            writeln!(s, "exec \"$__cpx_bin\"{flags} \"$@\"").unwrap();
         }
         Some(model) => {
             // Arrays are avoided on purpose: macOS still ships bash 3.2,
@@ -115,15 +166,15 @@ pub fn wrapper_script(ctx: &WrapperContext) -> String {
             writeln!(s, "__cpx_has_model=false").unwrap();
             writeln!(s, "for __cpx_arg in \"$@\"; do").unwrap();
             writeln!(s, "  case \"$__cpx_arg\" in").unwrap();
-            writeln!(s, "    --model|--model=*) __cpx_has_model=true; break ;;").unwrap();
+            writeln!(s, "    {model_patterns}) __cpx_has_model=true; break ;;").unwrap();
             writeln!(s, "  esac").unwrap();
             writeln!(s, "done\n").unwrap();
             writeln!(s, "if [ \"$__cpx_has_model\" = true ]; then").unwrap();
-            writeln!(s, "  exec \"$__cpx_claude\"{flags} \"$@\"").unwrap();
+            writeln!(s, "  exec \"$__cpx_bin\"{flags} \"$@\"").unwrap();
             writeln!(s, "else").unwrap();
             writeln!(
                 s,
-                "  exec \"$__cpx_claude\"{flags} --model {} \"$@\"",
+                "  exec \"$__cpx_bin\"{flags} --model {} \"$@\"",
                 sh_quote(model)
             )
             .unwrap();
@@ -134,7 +185,8 @@ pub fn wrapper_script(ctx: &WrapperContext) -> String {
     s
 }
 
-/// The `<profile>/bin/claude` shim placed on PATH by a bound `.envrc`.
+/// The `<profile>/bin/claude` (or `/codex`) shim placed on PATH by a bound
+/// `.envrc`.
 ///
 /// Deliberately the same script as the wrapper: a plain `claude` inside a
 /// bound directory must not quietly behave differently from `claude-<name>`.
@@ -164,7 +216,7 @@ mod tests {
             name,
             profile: &cfg.profiles[name],
             profile_dir: &dir,
-            claude_binary: &bin,
+            binary: &bin,
         })
     }
 
@@ -219,6 +271,7 @@ mod tests {
         assert!(s.contains("CLAUDE_"), "{s}");
         assert!(s.contains("ANTHROPIC_"), "{s}");
         assert!(s.contains("unset"), "{s}");
+        assert!(!s.contains("CODEX_|"), "{s}");
     }
 
     #[test]
@@ -279,7 +332,7 @@ mod tests {
             name: "work",
             profile: &cfg.profiles["work"],
             profile_dir: &dir,
-            claude_binary: &bin,
+            binary: &bin,
         });
         assert!(s.starts_with("#!/usr/bin/env bash"), "{s}");
         assert!(s.contains(MARKER), "{s}");
@@ -297,13 +350,73 @@ mod tests {
             name: "work",
             profile: &cfg.profiles["work"],
             profile_dir: &dir,
-            claude_binary: &bin,
+            binary: &bin,
         };
         assert_eq!(
             shim_script(&ctx),
             wrapper_script(&ctx),
             "`claude` inside a bound directory must behave exactly like `claude-work`"
         );
+    }
+}
+
+#[cfg(test)]
+mod codex_tests {
+    use super::*;
+    use crate::config::Config;
+    use std::path::PathBuf;
+
+    const CODEX: &str = "version = 1\n[profiles.work]\nprovider = \"codex\"\nmodel = \"gpt-5.5\"\nadd_dirs = [\"/srv/b\"]\nenv = { OPENAI_BASE_URL = \"https://proxy\" }\n";
+
+    fn script() -> String {
+        let cfg = Config::parse(CODEX, Path::new("/Users/tester")).unwrap();
+        wrapper_script(&WrapperContext {
+            name: "work",
+            profile: &cfg.profiles["work"],
+            profile_dir: &PathBuf::from("/Users/tester/.claude-profiles/work"),
+            binary: &PathBuf::from("/opt/homebrew/bin/codex"),
+        })
+    }
+
+    #[test]
+    fn a_codex_wrapper_points_codex_home_at_the_profile() {
+        let s = script();
+        assert!(s.contains("export CODEX_HOME='/Users/tester/.claude-profiles/work'"), "{s}");
+        assert!(s.contains("export CODEX_PROFILE='work'"), "{s}");
+        assert!(!s.contains("CLAUDE_CONFIG_DIR"), "{s}");
+    }
+
+    #[test]
+    fn a_codex_wrapper_scrubs_codex_and_openai_variables_but_keeps_its_own_env() {
+        let s = script();
+        assert!(s.contains("grep -E '^(CODEX_|OPENAI_)'"), "{s}");
+        assert!(!s.contains("ANTHROPIC_"), "{s}");
+        // The profile's own variables are exported after the scrub.
+        let scrub = s.find("grep -E '^(CODEX_|OPENAI_)'").unwrap();
+        let export = s.find("export OPENAI_BASE_URL='https://proxy'").unwrap();
+        assert!(scrub < export, "{s}");
+    }
+
+    #[test]
+    fn a_codex_wrapper_execs_the_codex_binary_and_passes_through_login() {
+        let s = script();
+        assert!(s.contains("__cpx_bin='/opt/homebrew/bin/codex'"), "{s}");
+        assert!(s.contains("login|logout|"), "{s}");
+        assert!(!s.contains("|auth|"), "{s}");
+    }
+
+    #[test]
+    fn a_codex_wrapper_honours_the_short_model_flag() {
+        let s = script();
+        assert!(s.contains("-m|--model|--model=*"), "{s}");
+        assert!(s.contains("--model 'gpt-5.5'"), "{s}");
+        assert!(s.contains("--add-dir '/srv/b'"), "{s}");
+    }
+
+    #[test]
+    fn a_codex_wrapper_names_the_product_in_its_header() {
+        let s = script();
+        assert!(s.contains("# Profile: work (Codex)"), "{s}");
     }
 }
 
@@ -319,7 +432,7 @@ mod color_tests {
             name: "work",
             profile: &cfg.profiles["work"],
             profile_dir: &PathBuf::from("/p/work"),
-            claude_binary: &PathBuf::from("/usr/bin/claude"),
+            binary: &PathBuf::from("/usr/bin/claude"),
         })
     }
 

@@ -1,9 +1,9 @@
 [workspace]
-members = ["crates/cpx-core", "crates/cpx-cli", "crates/cpx-app"]
+members = ["crates/cpx-core", "crates/cpx-cli"]
 resolver = "2"
 
 [workspace.package]
-version = "0.1.6"
+version = "0.2.0"
 edition = "2021"
 license = "MIT"
 rust-version = "1.75"
@@ -17,4 +17,5 @@ thiserror = "1"
 anyhow = "1"
 sha2 = "0.10"
 hex = "0.4"
+base64 = "0.22"
 tempfile = "3"

@@ -1,8 +1,8 @@
 //! Planning the materialization of profiles.
 
-use crate::config::{Config, Profile, ResourceKey, ResourceMode, ResourceSpec};
+use crate::config::{Config, Profile, Provider, ResourceKey, ResourceMode, ResourceSpec};
 use crate::layout::Layout;
-use crate::merge::deep_merge;
+use crate::merge::{deep_merge, merge_toml};
 use crate::plan::{Action, Plan, Risk};
 use crate::state::{hash_path, sha256_bytes, Ownership, State};
 use crate::wrapper::{shim_script, wrapper_script, WrapperContext};
@@ -28,6 +28,8 @@ pub struct ApplyOptions {
     pub sync: bool,
     /// The real Claude binary, resolved once and baked into every wrapper.
     pub claude_binary: PathBuf,
+    /// The real Codex binary, likewise.
+    pub codex_binary: PathBuf,
 }
 
 impl Default for ApplyOptions {
@@ -35,6 +37,16 @@ impl Default for ApplyOptions {
         ApplyOptions {
             sync: false,
             claude_binary: PathBuf::from("claude"),
+            codex_binary: PathBuf::from("codex"),
+        }
+    }
+}
+
+impl ApplyOptions {
+    pub fn binary(&self, provider: Provider) -> &Path {
+        match provider {
+            Provider::Claude => &self.claude_binary,
+            Provider::Codex => &self.codex_binary,
         }
     }
 }
@@ -74,6 +86,33 @@ fn read_source_json(path: &Path, plan: &mut Plan) -> Value {
             }
         },
     }
+}
+
+/// The merged content of a `merge` resource, JSON or TOML.
+fn merged_content(key: ResourceKey, src: &Path, patch: Option<&Value>, plan: &mut Plan) -> String {
+    if key.is_toml() {
+        let base = std::fs::read_to_string(src).unwrap_or_default();
+        let empty = Value::Object(Default::default());
+        return match merge_toml(&base, patch.unwrap_or(&empty)) {
+            Ok(text) => text,
+            Err(e) => {
+                plan.note(format!(
+                    "{}: {e}; merging the patch over an empty document instead",
+                    src.display()
+                ));
+                merge_toml("", patch.unwrap_or(&empty)).unwrap_or_default()
+            }
+        };
+    }
+
+    let base = read_source_json(src, plan);
+    let merged = match patch {
+        Some(patch) => deep_merge(&base, patch),
+        None => base,
+    };
+    let mut content = serde_json::to_string_pretty(&merged).expect("merged JSON is serializable");
+    content.push('\n');
+    content
 }
 
 /// One resource of one profile, resolved to concrete paths.
@@ -160,7 +199,7 @@ fn plan_resource(
         }
 
         ResourceMode::Own => {
-            // Files in `own` mode are Claude's to create. Directories are
+            // Files in `own` mode are the tool's to create. Directories are
             // made up front so it has somewhere to write.
             if key.is_dir() && std::fs::symlink_metadata(dst).is_err() {
                 plan.push(
@@ -178,18 +217,11 @@ fn plan_resource(
             let patch = spec.patch.clone();
             if !src.exists() && patch.is_none() {
                 // Nothing to merge and nothing to merge it over: writing an
-                // empty object would invent a file the user never had.
+                // empty file would invent one the user never had.
                 return Ok(());
             }
 
-            let base = read_source_json(src, plan);
-            let merged = match &patch {
-                Some(patch) => deep_merge(&base, patch),
-                None => base,
-            };
-            let mut content = serde_json::to_string_pretty(&merged)
-                .expect("merged JSON is serializable");
-            content.push('\n');
+            let content = merged_content(key, src, patch.as_ref(), plan);
 
             let ownership = state.classify(dst).map_err(io(dst))?;
             let actual = hash_path(dst).map_err(io(dst))?;
@@ -232,7 +264,7 @@ fn plan_scripts(
         name,
         profile,
         profile_dir: &config_dir,
-        claude_binary: &options.claude_binary,
+        binary: options.binary(profile.provider),
     };
 
     for (path, content, what) in [
@@ -270,16 +302,14 @@ fn plan_stale_wrappers(
     let Ok(entries) = std::fs::read_dir(&config.bin_dir) else {
         return Ok(());
     };
-    let live: Vec<String> = config
-        .profiles
-        .keys()
-        .map(|n| format!("{}{}", config.wrapper_prefix, n))
-        .collect();
+    let live: Vec<String> = config.profiles.keys().map(|n| config.command_name(n)).collect();
+    let prefixes: Vec<&str> = Provider::ALL.iter().map(|p| config.wrapper_prefix(*p)).collect();
 
     let mut stale: Vec<PathBuf> = Vec::new();
     for entry in entries.flatten() {
         let file_name = entry.file_name().to_string_lossy().to_string();
-        if !file_name.starts_with(&config.wrapper_prefix) || live.contains(&file_name) {
+        let looks_like_ours = prefixes.iter().any(|p| file_name.starts_with(p));
+        if !looks_like_ours || live.contains(&file_name) {
             continue;
         }
         let path = entry.path();
@@ -313,8 +343,14 @@ pub fn plan_apply(
     state: &State,
     options: &ApplyOptions,
 ) -> Result<Plan, PlanError> {
-    if !config.source_dir.exists() {
-        return Err(PlanError::SourceMissing(config.source_dir.clone()));
+    // A provider's source must exist before anything can be built from it —
+    // but only for providers that have profiles. A Claude-only installation
+    // must not fail because Codex was never installed.
+    for provider in config.providers_in_use() {
+        let source = config.source_dir(provider);
+        if !source.exists() {
+            return Err(PlanError::SourceMissing(source.to_path_buf()));
+        }
     }
 
     let mut plan = Plan::default();
@@ -334,8 +370,9 @@ pub fn plan_apply(
             }
         }
 
+        let source = config.source_dir(profile.provider);
         for (key, spec) in &profile.resources {
-            let src = config.source_dir.join(key.target_name());
+            let src = source.join(key.target_name());
             let dst = dir.join(key.target_name());
             plan_resource(
                 &mut plan,

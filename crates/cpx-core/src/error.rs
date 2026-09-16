@@ -14,6 +14,16 @@ pub enum ConfigError {
     #[error("unknown resource key `{key}` (known keys: {known})")]
     UnknownResourceKey { key: String, known: String },
 
+    #[error("resource `{key}` does not exist for {provider} profiles (their keys: {known})")]
+    ResourceNotForProvider {
+        key: String,
+        provider: String,
+        known: String,
+    },
+
+    #[error("profile `{profile}` names provider `{provider}`; expected `claude` or `codex`")]
+    UnknownProvider { profile: String, provider: String },
+
     #[error("unknown resource mode `{mode}` for `{key}` (known modes: link, copy, own, merge)")]
     UnknownResourceMode { key: String, mode: String },
 

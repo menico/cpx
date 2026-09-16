@@ -1,7 +1,7 @@
 //! Managed-block editing, the registry, and bind/unbind planning.
 
 use cpx_core::binding::*;
-use cpx_core::config::Config;
+use cpx_core::config::{Config, Provider};
 use cpx_core::layout::Layout;
 use cpx_core::plan::Action;
 use std::collections::BTreeMap;
@@ -9,14 +9,30 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 
+fn entry(name: &str, provider: Provider, dir: &str) -> BlockEntry {
+    BlockEntry {
+        name: name.to_string(),
+        provider,
+        profile_dir: PathBuf::from(dir),
+        profile_bin_dir: PathBuf::from(dir).join("bin"),
+        env: BTreeMap::new(),
+        color: None,
+    }
+}
+
 fn block(name: &str) -> String {
-    render_block(
+    render_block(&[entry(
         name,
-        Path::new("/home/t/.claude-profiles/work"),
-        Path::new("/home/t/.claude-profiles/work/bin"),
-        &BTreeMap::new(),
-        None,
-    )
+        Provider::Claude,
+        &format!("/home/t/.claude-profiles/{name}"),
+    )])
+}
+
+fn with_env(env: BTreeMap<String, String>) -> String {
+    render_block(&[BlockEntry {
+        env,
+        ..entry("work", Provider::Claude, "/p/work")
+    }])
 }
 
 #[test]
@@ -47,7 +63,7 @@ fn a_block_puts_the_profile_shim_on_path() {
 fn a_block_carries_the_profile_env_vars() {
     let mut env = BTreeMap::new();
     env.insert("MY_VAR".to_string(), "value".to_string());
-    let b = render_block("work", Path::new("/p/work"), Path::new("/p/work/bin"), &env, None);
+    let b = with_env(env);
     assert!(b.contains("export MY_VAR="), "{b}");
 }
 
@@ -55,8 +71,48 @@ fn a_block_carries_the_profile_env_vars() {
 fn block_values_are_quoted_against_injection() {
     let mut env = BTreeMap::new();
     env.insert("EVIL".to_string(), "$(touch /tmp/pwned)".to_string());
-    let b = render_block("work", Path::new("/p/work"), Path::new("/p/work/bin"), &env, None);
+    let b = with_env(env);
     assert!(b.contains("export EVIL='$(touch /tmp/pwned)'"), "{b}");
+}
+
+#[test]
+fn a_codex_block_exports_codex_home() {
+    let b = render_block(&[entry("work", Provider::Codex, "/p/work")]);
+    assert!(b.starts_with("# >>> cpx: work >>>"), "{b}");
+    assert!(b.contains("export CODEX_HOME='/p/work'"), "{b}");
+    assert!(b.contains("export CODEX_PROFILE='work'"), "{b}");
+    assert!(!b.contains("CLAUDE_"), "{b}");
+    assert!(b.contains("PATH_add '/p/work/bin'"), "{b}");
+}
+
+#[test]
+fn a_block_can_hold_one_profile_per_provider() {
+    let b = render_block(&[
+        entry("work-codex", Provider::Codex, "/p/work-codex"),
+        entry("work", Provider::Claude, "/p/work"),
+    ]);
+    // Claude first, whatever order they were given in.
+    assert!(b.starts_with("# >>> cpx: work, work-codex >>>"), "{b}");
+    assert!(b.contains("export CLAUDE_CONFIG_DIR='/p/work'"), "{b}");
+    assert!(b.contains("export CODEX_HOME='/p/work-codex'"), "{b}");
+    assert_eq!(b.matches("PATH_add").count(), 2, "{b}");
+    assert_eq!(b.matches(BLOCK_END).count(), 1, "{b}");
+    let claude = b.find("CLAUDE_CONFIG_DIR").unwrap();
+    let codex = b.find("CODEX_HOME").unwrap();
+    assert!(claude < codex, "{b}");
+}
+
+#[test]
+fn a_two_provider_block_renders_the_same_whichever_way_round() {
+    let a = render_block(&[
+        entry("work", Provider::Claude, "/p/work"),
+        entry("work-codex", Provider::Codex, "/p/work-codex"),
+    ]);
+    let b = render_block(&[
+        entry("work-codex", Provider::Codex, "/p/work-codex"),
+        entry("work", Provider::Claude, "/p/work"),
+    ]);
+    assert_eq!(a, b);
 }
 
 #[test]
@@ -135,21 +191,45 @@ fn extract_returns_the_block_verbatim() {
 
 // --- registry ---
 
+fn binding(path: &str, profile: &str, provider: Provider) -> Binding {
+    Binding {
+        path: PathBuf::from(path),
+        profile: profile.into(),
+        provider,
+        block_sha256: "h".into(),
+    }
+}
+
 #[test]
 fn the_registry_round_trips_through_disk() {
     let d = TempDir::new().unwrap();
     let path = d.path().join("bindings.toml");
     let mut bindings = Bindings::default();
-    bindings.upsert(Binding {
-        path: PathBuf::from("/work/project"),
-        profile: "work".into(),
-        block_sha256: "abc".into(),
-    });
+    bindings.upsert(binding("/work/project", "work", Provider::Claude));
     bindings.save(&path).unwrap();
 
     let loaded = Bindings::load(&path).unwrap();
     assert_eq!(loaded.entries.len(), 1);
-    assert_eq!(loaded.get(Path::new("/work/project")).unwrap().profile, "work");
+    assert_eq!(
+        loaded
+            .find(Path::new("/work/project"), Provider::Claude)
+            .unwrap()
+            .profile,
+        "work"
+    );
+}
+
+#[test]
+fn a_registry_written_before_codex_support_still_loads() {
+    let d = TempDir::new().unwrap();
+    let path = d.path().join("bindings.toml");
+    fs::write(
+        &path,
+        "[[bindings]]\npath = \"/work/project\"\nprofile = \"work\"\nblock_sha256 = \"abc\"\n",
+    )
+    .unwrap();
+    let loaded = Bindings::load(&path).unwrap();
+    assert_eq!(loaded.entries[0].provider, Provider::Claude);
 }
 
 #[test]
@@ -159,30 +239,39 @@ fn loading_an_absent_registry_yields_an_empty_one() {
 }
 
 #[test]
-fn rebinding_a_directory_replaces_its_entry() {
+fn rebinding_a_directory_replaces_its_entry_for_that_provider() {
     let mut bindings = Bindings::default();
     for profile in ["work", "personal"] {
-        bindings.upsert(Binding {
-            path: PathBuf::from("/p"),
-            profile: profile.into(),
-            block_sha256: "h".into(),
-        });
+        bindings.upsert(binding("/p", profile, Provider::Claude));
     }
     assert_eq!(bindings.entries.len(), 1);
-    assert_eq!(bindings.get(Path::new("/p")).unwrap().profile, "personal");
+    assert_eq!(
+        bindings.find(Path::new("/p"), Provider::Claude).unwrap().profile,
+        "personal"
+    );
+}
+
+#[test]
+fn a_directory_can_hold_a_binding_per_provider() {
+    let mut bindings = Bindings::default();
+    bindings.upsert(binding("/p", "work", Provider::Claude));
+    bindings.upsert(binding("/p", "work-codex", Provider::Codex));
+    assert_eq!(bindings.at(Path::new("/p")).len(), 2);
+    assert_eq!(bindings.find(Path::new("/p"), Provider::Codex).unwrap().profile, "work-codex");
+    assert!(bindings.is_bound(Path::new("/p")));
 }
 
 #[test]
 fn removing_a_binding_returns_it() {
     let mut bindings = Bindings::default();
-    bindings.upsert(Binding {
-        path: PathBuf::from("/p"),
-        profile: "work".into(),
-        block_sha256: "h".into(),
-    });
-    assert!(bindings.remove(Path::new("/p")).is_some());
-    assert!(bindings.get(Path::new("/p")).is_none());
-    assert!(bindings.remove(Path::new("/p")).is_none());
+    bindings.upsert(binding("/p", "work", Provider::Claude));
+    bindings.upsert(binding("/p", "work-codex", Provider::Codex));
+    assert!(bindings.remove_provider(Path::new("/p"), Provider::Codex).is_some());
+    assert!(bindings.find(Path::new("/p"), Provider::Codex).is_none());
+    assert!(bindings.is_bound(Path::new("/p")));
+    assert_eq!(bindings.remove(Path::new("/p")).len(), 1);
+    assert!(!bindings.is_bound(Path::new("/p")));
+    assert!(bindings.remove(Path::new("/p")).is_empty());
 }
 
 // --- planning ---
@@ -195,6 +284,7 @@ struct Env {
 fn env() -> Env {
     let dir = TempDir::new().unwrap();
     fs::create_dir_all(dir.path().join(".claude")).unwrap();
+    fs::create_dir_all(dir.path().join(".codex")).unwrap();
     let layout = Layout::new(dir.path());
     Env { layout, dir }
 }
@@ -202,7 +292,7 @@ fn env() -> Env {
 impl Env {
     fn config(&self) -> Config {
         Config::parse(
-            "version = 1\n[profiles.work]\nenv = { A = \"1\" }\n",
+            "version = 1\n[profiles.work]\nenv = { A = \"1\" }\n[profiles.work-codex]\nprovider = \"codex\"\n",
             self.dir.path(),
         )
         .unwrap()
@@ -212,6 +302,18 @@ impl Env {
         let p = self.dir.path().join("project");
         fs::create_dir_all(&p).unwrap();
         p
+    }
+
+    fn sources(&self) -> Vec<PathBuf> {
+        self.config().source_dirs()
+    }
+
+    fn bind(&self, bindings: &Bindings, profile: &str, dir: &Path) -> BindPlan {
+        plan_bind(&self.config(), &self.layout, bindings, profile, dir).unwrap()
+    }
+
+    fn unbind(&self, bindings: &Bindings, dir: &Path, provider: Option<Provider>) -> UnbindPlan {
+        plan_unbind(&self.config(), &self.layout, bindings, dir, provider).unwrap()
     }
 }
 
@@ -228,10 +330,20 @@ fn action_kinds(plan: &cpx_core::plan::Plan) -> Vec<&'static str> {
         .collect()
 }
 
+fn envrc_content(plan: &cpx_core::plan::Plan) -> String {
+    plan.actions
+        .iter()
+        .find_map(|a| match &a.action {
+            Action::WriteEnvrcBlock { content, .. } => Some(content.clone()),
+            _ => None,
+        })
+        .expect("no envrc write planned")
+}
+
 #[test]
 fn binding_plans_an_envrc_write_and_a_direnv_allow() {
     let e = env();
-    let planned = plan_bind(&e.config(), &e.layout, "work", &e.project()).unwrap();
+    let planned = e.bind(&Bindings::default(), "work", &e.project());
     let kinds = action_kinds(&planned.plan);
     assert!(kinds.contains(&"write-envrc"), "{kinds:?}");
     assert!(kinds.contains(&"direnv-allow"), "{kinds:?}");
@@ -241,7 +353,7 @@ fn binding_plans_an_envrc_write_and_a_direnv_allow() {
 fn binding_an_unknown_profile_is_refused() {
     let e = env();
     assert!(matches!(
-        plan_bind(&e.config(), &e.layout, "nope", &e.project()),
+        plan_bind(&e.config(), &e.layout, &Bindings::default(), "nope", &e.project()),
         Err(BindError::UnknownProfile(_))
     ));
 }
@@ -252,7 +364,7 @@ fn binding_a_path_that_is_not_a_directory_is_refused() {
     let file = e.dir.path().join("a-file");
     fs::write(&file, "x").unwrap();
     assert!(matches!(
-        plan_bind(&e.config(), &e.layout, "work", &file),
+        plan_bind(&e.config(), &e.layout, &Bindings::default(), "work", &file),
         Err(BindError::NotADirectory(_))
     ));
 }
@@ -263,7 +375,7 @@ fn binding_inside_a_git_repo_plans_a_local_exclude_not_a_gitignore() {
     let project = e.project();
     fs::create_dir_all(project.join(".git/info")).unwrap();
 
-    let planned = plan_bind(&e.config(), &e.layout, "work", &project).unwrap();
+    let planned = e.bind(&Bindings::default(), "work", &project);
     assert!(action_kinds(&planned.plan).contains(&"git-exclude"));
     assert!(
         !project.join(".gitignore").exists(),
@@ -274,33 +386,66 @@ fn binding_inside_a_git_repo_plans_a_local_exclude_not_a_gitignore() {
 #[test]
 fn binding_outside_a_git_repo_plans_no_exclude() {
     let e = env();
-    let planned = plan_bind(&e.config(), &e.layout, "work", &e.project()).unwrap();
+    let planned = e.bind(&Bindings::default(), "work", &e.project());
     assert!(!action_kinds(&planned.plan).contains(&"git-exclude"));
 }
 
 #[test]
 fn the_planned_binding_records_the_block_hash() {
     let e = env();
-    let planned = plan_bind(&e.config(), &e.layout, "work", &e.project()).unwrap();
-    assert_eq!(planned.binding.profile, "work");
-    assert_eq!(planned.binding.path, e.project());
-    assert_eq!(planned.binding.block_sha256.len(), 64);
+    let planned = e.bind(&Bindings::default(), "work", &e.project());
+    assert_eq!(planned.bindings.len(), 1);
+    assert_eq!(planned.bindings[0].profile, "work");
+    assert_eq!(planned.bindings[0].provider, Provider::Claude);
+    assert_eq!(planned.bindings[0].path, e.project());
+    assert_eq!(planned.bindings[0].block_sha256.len(), 64);
 }
 
 #[test]
 fn the_planned_block_carries_the_profile_env() {
     let e = env();
-    let planned = plan_bind(&e.config(), &e.layout, "work", &e.project()).unwrap();
-    let Some(Action::WriteEnvrcBlock { content, .. }) = planned
-        .plan
-        .actions
-        .iter()
-        .map(|a| &a.action)
-        .find(|a| matches!(a, Action::WriteEnvrcBlock { .. }))
-    else {
-        panic!("no envrc write planned");
-    };
-    assert!(content.contains("export A='1'"), "{content}");
+    let planned = e.bind(&Bindings::default(), "work", &e.project());
+    assert!(envrc_content(&planned.plan).contains("export A='1'"));
+}
+
+#[test]
+fn binding_a_codex_profile_beside_a_claude_one_shares_the_block() {
+    let e = env();
+    let project = e.project();
+    let mut bindings = Bindings::default();
+
+    let first = e.bind(&bindings, "work", &project);
+    for b in first.bindings {
+        bindings.upsert(b);
+    }
+    let second = e.bind(&bindings, "work-codex", &project);
+
+    let content = envrc_content(&second.plan);
+    assert_eq!(content.matches("# >>> cpx:").count(), 1, "{content}");
+    assert!(content.contains("CLAUDE_CONFIG_DIR"), "{content}");
+    assert!(content.contains("CODEX_HOME"), "{content}");
+
+    // Both entries are re-recorded with the new block's hash.
+    assert_eq!(second.bindings.len(), 2);
+    let hashes: Vec<&str> = second.bindings.iter().map(|b| b.block_sha256.as_str()).collect();
+    assert_eq!(hashes[0], hashes[1]);
+    assert!(second.bindings.iter().any(|b| b.profile == "work"));
+    assert!(second.bindings.iter().any(|b| b.profile == "work-codex"));
+}
+
+#[test]
+fn rebinding_the_same_provider_replaces_rather_than_adds() {
+    let e = env();
+    let project = e.project();
+    let mut bindings = Bindings::default();
+    bindings.upsert(binding(project.to_str().unwrap(), "work", Provider::Claude));
+    bindings.upsert(binding(project.to_str().unwrap(), "work-codex", Provider::Codex));
+
+    let planned = e.bind(&bindings, "work", &project);
+    assert_eq!(planned.bindings.len(), 2, "{:?}", planned.bindings);
+    let content = envrc_content(&planned.plan);
+    assert_eq!(content.matches("CLAUDE_CONFIG_DIR").count(), 1, "{content}");
+    assert_eq!(content.matches("CODEX_HOME").count(), 1, "{content}");
 }
 
 #[test]
@@ -308,7 +453,7 @@ fn unbinding_plans_a_block_removal_and_a_reallow() {
     let e = env();
     let project = e.project();
     fs::write(project.join(".envrc"), format!("{}\n", block("work"))).unwrap();
-    let kinds = action_kinds(&plan_unbind(&project).unwrap());
+    let kinds = action_kinds(&e.unbind(&Bindings::default(), &project, None).plan);
     assert!(kinds.contains(&"remove-envrc"), "{kinds:?}");
 }
 
@@ -317,7 +462,49 @@ fn unbinding_a_directory_with_no_block_plans_nothing() {
     let e = env();
     let project = e.project();
     fs::write(project.join(".envrc"), "use flake\n").unwrap();
-    assert!(plan_unbind(&project).unwrap().is_empty());
+    assert!(e.unbind(&Bindings::default(), &project, None).plan.is_empty());
+}
+
+#[test]
+fn unbinding_one_provider_keeps_the_other_in_the_block() {
+    let e = env();
+    let project = e.project();
+    let mut bindings = Bindings::default();
+    let first = e.bind(&bindings, "work", &project);
+    for b in first.bindings {
+        bindings.upsert(b);
+    }
+    let second = e.bind(&bindings, "work-codex", &project);
+    for b in second.bindings {
+        bindings.upsert(b);
+    }
+    fs::write(project.join(".envrc"), envrc_content(&second.plan)).unwrap();
+
+    let planned = e.unbind(&bindings, &project, Some(Provider::Codex));
+    let kinds = action_kinds(&planned.plan);
+    assert!(kinds.contains(&"write-envrc"), "{kinds:?}");
+    assert!(!kinds.contains(&"remove-envrc"), "{kinds:?}");
+    let content = envrc_content(&planned.plan);
+    assert!(content.contains("CLAUDE_CONFIG_DIR"), "{content}");
+    assert!(!content.contains("CODEX_HOME"), "{content}");
+    assert_eq!(planned.remaining.len(), 1);
+    assert_eq!(planned.remaining[0].profile, "work");
+}
+
+#[test]
+fn unbinding_the_last_provider_removes_the_block() {
+    let e = env();
+    let project = e.project();
+    let mut bindings = Bindings::default();
+    let first = e.bind(&bindings, "work", &project);
+    for b in first.bindings {
+        bindings.upsert(b);
+    }
+    fs::write(project.join(".envrc"), envrc_content(&first.plan)).unwrap();
+
+    let planned = e.unbind(&bindings, &project, Some(Provider::Claude));
+    assert!(action_kinds(&planned.plan).contains(&"remove-envrc"));
+    assert!(planned.remaining.is_empty());
 }
 
 // --- git exclude discovery ---
@@ -355,9 +542,9 @@ fn git_info_exclude_is_none_outside_a_repo() {
 use cpx_core::execute::{execute, ExecuteOptions};
 use cpx_core::state::State;
 
-fn run(plan: &cpx_core::plan::Plan, source: &Path) -> State {
+fn run(plan: &cpx_core::plan::Plan, sources: &[PathBuf]) -> State {
     let mut state = State::default();
-    execute(plan, &mut state, source, &ExecuteOptions::default()).expect("plan should execute");
+    execute(plan, &mut state, sources, &ExecuteOptions::default()).expect("plan should execute");
     state
 }
 
@@ -365,8 +552,8 @@ fn run(plan: &cpx_core::plan::Plan, source: &Path) -> State {
 fn executing_a_bind_writes_the_envrc() {
     let e = env();
     let project = e.project();
-    let planned = plan_bind(&e.config(), &e.layout, "work", &project).unwrap();
-    run(&planned.plan, &e.dir.path().join(".claude"));
+    let planned = e.bind(&Bindings::default(), "work", &project);
+    run(&planned.plan, &e.sources());
 
     let text = fs::read_to_string(project.join(".envrc")).unwrap();
     assert!(text.contains("# >>> cpx: work >>>"), "{text}");
@@ -379,8 +566,8 @@ fn executing_a_bind_preserves_a_pre_existing_envrc() {
     let project = e.project();
     fs::write(project.join(".envrc"), "use flake\nlayout python\n").unwrap();
 
-    let planned = plan_bind(&e.config(), &e.layout, "work", &project).unwrap();
-    run(&planned.plan, &e.dir.path().join(".claude"));
+    let planned = e.bind(&Bindings::default(), "work", &project);
+    run(&planned.plan, &e.sources());
 
     let text = fs::read_to_string(project.join(".envrc")).unwrap();
     assert!(text.contains("use flake"), "{text}");
@@ -394,11 +581,10 @@ fn bind_then_unbind_restores_the_original_file_exactly() {
     let project = e.project();
     let original = "use flake\nlayout python\n";
     fs::write(project.join(".envrc"), original).unwrap();
-    let source = e.dir.path().join(".claude");
 
-    let planned = plan_bind(&e.config(), &e.layout, "work", &project).unwrap();
-    run(&planned.plan, &source);
-    run(&plan_unbind(&project).unwrap(), &source);
+    let planned = e.bind(&Bindings::default(), "work", &project);
+    run(&planned.plan, &e.sources());
+    run(&e.unbind(&Bindings::default(), &project, None).plan, &e.sources());
 
     assert_eq!(
         fs::read_to_string(project.join(".envrc")).unwrap(),
@@ -408,16 +594,44 @@ fn bind_then_unbind_restores_the_original_file_exactly() {
 }
 
 #[test]
+fn bind_both_then_unbind_both_restores_the_original_file_exactly() {
+    let e = env();
+    let project = e.project();
+    let original = "use flake\n";
+    fs::write(project.join(".envrc"), original).unwrap();
+    let mut bindings = Bindings::default();
+
+    for profile in ["work", "work-codex"] {
+        let planned = e.bind(&bindings, profile, &project);
+        run(&planned.plan, &e.sources());
+        for b in planned.bindings {
+            bindings.upsert(b);
+        }
+    }
+    let text = fs::read_to_string(project.join(".envrc")).unwrap();
+    assert!(text.contains("CODEX_HOME") && text.contains("CLAUDE_CONFIG_DIR"), "{text}");
+
+    for provider in [Provider::Codex, Provider::Claude] {
+        let planned = e.unbind(&bindings, &project, Some(provider));
+        run(&planned.plan, &e.sources());
+        bindings.remove_provider(&project, provider);
+        for b in planned.remaining {
+            bindings.upsert(b);
+        }
+    }
+    assert_eq!(fs::read_to_string(project.join(".envrc")).unwrap(), original);
+}
+
+#[test]
 fn unbinding_removes_an_envrc_that_only_held_our_block() {
     let e = env();
     let project = e.project();
-    let source = e.dir.path().join(".claude");
 
-    let planned = plan_bind(&e.config(), &e.layout, "work", &project).unwrap();
-    run(&planned.plan, &source);
+    let planned = e.bind(&Bindings::default(), "work", &project);
+    run(&planned.plan, &e.sources());
     assert!(project.join(".envrc").exists());
 
-    run(&plan_unbind(&project).unwrap(), &source);
+    run(&e.unbind(&Bindings::default(), &project, None).plan, &e.sources());
     assert!(
         !project.join(".envrc").exists(),
         "an empty .envrc left behind is litter"
@@ -429,11 +643,10 @@ fn the_git_exclude_line_is_written_once_however_often_we_bind() {
     let e = env();
     let project = e.project();
     fs::create_dir_all(project.join(".git/info")).unwrap();
-    let source = e.dir.path().join(".claude");
 
     for _ in 0..3 {
-        let planned = plan_bind(&e.config(), &e.layout, "work", &project).unwrap();
-        run(&planned.plan, &source);
+        let planned = e.bind(&Bindings::default(), "work", &project);
+        run(&planned.plan, &e.sources());
     }
 
     let exclude = fs::read_to_string(project.join(".git/info/exclude")).unwrap();
@@ -447,8 +660,8 @@ fn the_git_exclude_keeps_lines_that_were_already_there() {
     fs::create_dir_all(project.join(".git/info")).unwrap();
     fs::write(project.join(".git/info/exclude"), "# personal\n*.log\n").unwrap();
 
-    let planned = plan_bind(&e.config(), &e.layout, "work", &project).unwrap();
-    run(&planned.plan, &e.dir.path().join(".claude"));
+    let planned = e.bind(&Bindings::default(), "work", &project);
+    run(&planned.plan, &e.sources());
 
     let exclude = fs::read_to_string(project.join(".git/info/exclude")).unwrap();
     assert!(exclude.contains("*.log"), "{exclude}");
@@ -459,11 +672,10 @@ fn the_git_exclude_keeps_lines_that_were_already_there() {
 fn binding_twice_leaves_exactly_one_block() {
     let e = env();
     let project = e.project();
-    let source = e.dir.path().join(".claude");
 
     for profile in ["work", "work"] {
-        let planned = plan_bind(&e.config(), &e.layout, profile, &project).unwrap();
-        run(&planned.plan, &source);
+        let planned = e.bind(&Bindings::default(), profile, &project);
+        run(&planned.plan, &e.sources());
     }
     let text = fs::read_to_string(project.join(".envrc")).unwrap();
     assert_eq!(text.matches("# >>> cpx:").count(), 1, "{text}");
@@ -473,26 +685,46 @@ fn binding_twice_leaves_exactly_one_block() {
 fn a_healthy_binding_is_reported_healthy() {
     let e = env();
     let project = e.project();
-    let planned = plan_bind(&e.config(), &e.layout, "work", &project).unwrap();
-    run(&planned.plan, &e.dir.path().join(".claude"));
+    let planned = e.bind(&Bindings::default(), "work", &project);
+    run(&planned.plan, &e.sources());
 
     // direnv trust is environment-dependent; everything else must be right.
+    let status = health(&planned.bindings[0], &e.config());
     assert!(
-        matches!(
-            health(&planned.binding, &e.config()),
-            BindingHealth::Healthy | BindingHealth::NotAllowed
-        ),
-        "got {:?}",
-        health(&planned.binding, &e.config())
+        matches!(status, BindingHealth::Healthy | BindingHealth::NotAllowed),
+        "got {status:?}"
     );
+}
+
+#[test]
+fn both_entries_of_a_shared_block_are_healthy() {
+    let e = env();
+    let project = e.project();
+    let mut bindings = Bindings::default();
+    let first = e.bind(&bindings, "work", &project);
+    run(&first.plan, &e.sources());
+    for b in first.bindings {
+        bindings.upsert(b);
+    }
+    let second = e.bind(&bindings, "work-codex", &project);
+    run(&second.plan, &e.sources());
+
+    for b in &second.bindings {
+        let status = health(b, &e.config());
+        assert!(
+            matches!(status, BindingHealth::Healthy | BindingHealth::NotAllowed),
+            "{}: {status:?}",
+            b.profile
+        );
+    }
 }
 
 #[test]
 fn a_hand_edited_block_is_reported_as_edited() {
     let e = env();
     let project = e.project();
-    let planned = plan_bind(&e.config(), &e.layout, "work", &project).unwrap();
-    run(&planned.plan, &e.dir.path().join(".claude"));
+    let planned = e.bind(&Bindings::default(), "work", &project);
+    run(&planned.plan, &e.sources());
 
     let envrc = project.join(".envrc");
     let text = fs::read_to_string(&envrc)
@@ -501,7 +733,7 @@ fn a_hand_edited_block_is_reported_as_edited() {
     fs::write(&envrc, text).unwrap();
 
     assert_eq!(
-        health(&planned.binding, &e.config()),
+        health(&planned.bindings[0], &e.config()),
         BindingHealth::BlockEdited
     );
 }
@@ -510,12 +742,12 @@ fn a_hand_edited_block_is_reported_as_edited() {
 fn a_binding_whose_profile_was_deleted_is_reported() {
     let e = env();
     let project = e.project();
-    let planned = plan_bind(&e.config(), &e.layout, "work", &project).unwrap();
-    run(&planned.plan, &e.dir.path().join(".claude"));
+    let planned = e.bind(&Bindings::default(), "work", &project);
+    run(&planned.plan, &e.sources());
 
     let without = Config::parse("version = 1\n[profiles.other]\n", e.dir.path()).unwrap();
     assert_eq!(
-        health(&planned.binding, &without),
+        health(&planned.bindings[0], &without),
         BindingHealth::ProfileMissing
     );
 }
@@ -524,34 +756,43 @@ fn a_binding_whose_profile_was_deleted_is_reported() {
 fn a_binding_whose_directory_vanished_is_reported() {
     let e = env();
     let project = e.project();
-    let planned = plan_bind(&e.config(), &e.layout, "work", &project).unwrap();
+    let planned = e.bind(&Bindings::default(), "work", &project);
     fs::remove_dir_all(&project).unwrap();
     assert_eq!(
-        health(&planned.binding, &e.config()),
+        health(&planned.bindings[0], &e.config()),
         BindingHealth::DirectoryMissing
     );
 }
 
 #[test]
 fn a_block_exports_the_identity_colour_for_the_statusline_badge() {
-    let b = render_block(
-        "work",
-        Path::new("/p/work"),
-        Path::new("/p/work/bin"),
-        &BTreeMap::new(),
-        Some("#5c8dff"),
-    );
+    let b = render_block(&[BlockEntry {
+        color: Some("#5c8dff".into()),
+        ..entry("work", Provider::Claude, "/p/work")
+    }]);
     assert!(b.contains("export CPX_PROFILE_COLOR='#5c8dff'"), "{b}");
 }
 
 #[test]
 fn a_block_omits_the_colour_when_the_profile_has_none() {
-    let b = render_block(
-        "work",
-        Path::new("/p/work"),
-        Path::new("/p/work/bin"),
-        &BTreeMap::new(),
-        None,
-    );
+    let b = block("work");
     assert!(!b.contains("CPX_PROFILE_COLOR"), "{b}");
+}
+
+#[test]
+fn only_the_claude_entry_exports_the_badge_colour() {
+    // The badge is a Claude statusline; a Codex colour would only overwrite
+    // the one that is actually read.
+    let b = render_block(&[
+        BlockEntry {
+            color: Some("#5c8dff".into()),
+            ..entry("work", Provider::Claude, "/p/work")
+        },
+        BlockEntry {
+            color: Some("#d4676b".into()),
+            ..entry("work-codex", Provider::Codex, "/p/work-codex")
+        },
+    ]);
+    assert!(b.contains("CPX_PROFILE_COLOR='#5c8dff'"), "{b}");
+    assert!(!b.contains("#d4676b"), "{b}");
 }

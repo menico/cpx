@@ -1,4 +1,4 @@
-use cpx_core::config::Config;
+use cpx_core::config::{Config, Provider};
 use cpx_core::config_edit::*;
 use std::path::Path;
 
@@ -28,7 +28,8 @@ fn a_starter_config_parses() {
     let text = starter_config(&[("work".into(), "Company account".into())]);
     let cfg = parse(&text);
     assert_eq!(cfg.profiles["work"].description, "Company account");
-    assert_eq!(cfg.source_dir, home().join(".claude"));
+    assert_eq!(cfg.source_dir(Provider::Claude), home().join(".claude"));
+    assert_eq!(cfg.source_dir(Provider::Codex), home().join(".codex"));
 }
 
 #[test]
@@ -38,7 +39,7 @@ fn a_starter_config_with_no_profiles_is_still_valid() {
 
 #[test]
 fn adding_a_profile_keeps_the_existing_ones() {
-    let out = add_profile(WITH_COMMENTS, "personal", "Mine").unwrap();
+    let out = add_profile(WITH_COMMENTS, "personal", "Mine", Provider::Claude).unwrap();
     let cfg = parse(&out);
     assert_eq!(cfg.profiles.len(), 2);
     assert_eq!(cfg.profiles["personal"].description, "Mine");
@@ -47,7 +48,7 @@ fn adding_a_profile_keeps_the_existing_ones() {
 
 #[test]
 fn adding_a_profile_preserves_comments_and_layout() {
-    let out = add_profile(WITH_COMMENTS, "personal", "Mine").unwrap();
+    let out = add_profile(WITH_COMMENTS, "personal", "Mine", Provider::Claude).unwrap();
     assert!(out.contains("# my settings"), "{out}");
     assert!(out.contains("# where the base lives"), "{out}");
 }
@@ -55,7 +56,7 @@ fn adding_a_profile_preserves_comments_and_layout() {
 #[test]
 fn adding_a_profile_that_exists_is_refused() {
     assert!(matches!(
-        add_profile(WITH_COMMENTS, "work", "again"),
+        add_profile(WITH_COMMENTS, "work", "again", Provider::Claude),
         Err(EditError::ProfileExists(_))
     ));
 }
@@ -95,7 +96,7 @@ fn cloning_leaves_the_original_untouched() {
 
 #[test]
 fn cloning_onto_an_existing_name_is_refused() {
-    let with_two = add_profile(WITH_COMMENTS, "personal", "Mine").unwrap();
+    let with_two = add_profile(WITH_COMMENTS, "personal", "Mine", Provider::Claude).unwrap();
     assert!(matches!(
         clone_profile(&with_two, "work", "personal"),
         Err(EditError::ProfileExists(_))
@@ -113,7 +114,7 @@ fn cloning_an_unknown_profile_is_refused() {
 #[test]
 fn an_invalid_profile_name_is_refused_rather_than_written() {
     // The name becomes a directory and part of a wrapper filename.
-    assert!(add_profile(WITH_COMMENTS, "a/b", "bad").is_err());
+    assert!(add_profile(WITH_COMMENTS, "a/b", "bad", Provider::Claude).is_err());
     assert!(clone_profile(WITH_COMMENTS, "work", "..").is_err());
 }
 
@@ -121,7 +122,7 @@ fn an_invalid_profile_name_is_refused_rather_than_written() {
 
 #[test]
 fn setting_a_resource_mode_records_it_for_that_profile_only() {
-    let text = add_profile(WITH_COMMENTS, "personal", "Mine").unwrap();
+    let text = add_profile(WITH_COMMENTS, "personal", "Mine", Provider::Claude).unwrap();
     let out = set_resource_mode(&text, "work", "projects", "link").unwrap();
     let cfg = parse(&out);
     assert_eq!(
@@ -198,7 +199,7 @@ fn an_unwritable_profile_field_is_refused() {
 fn adoption_of(dir: &std::path::Path) -> cpx_core::adopt::Adoption {
     use cpx_core::config::{ResourceKey, ResourceMode};
     let mut resources = std::collections::BTreeMap::new();
-    for key in ResourceKey::ALL {
+    for key in ResourceKey::for_provider(Provider::Claude).iter().copied() {
         resources.insert(
             key,
             match key {
@@ -211,6 +212,7 @@ fn adoption_of(dir: &std::path::Path) -> cpx_core::adopt::Adoption {
     }
     cpx_core::adopt::Adoption {
         name: "hd".into(),
+        provider: Provider::Claude,
         dir: dir.to_path_buf(),
         resources,
         found: vec!["plugins".into()],
@@ -335,4 +337,27 @@ fn a_patch_on_a_resource_that_cannot_merge_is_refused() {
         Some(&serde_json::json!({"x": 1}))
     )
     .is_err());
+}
+
+
+#[test]
+fn a_codex_profile_is_added_with_its_provider() {
+    let out = add_profile(WITH_COMMENTS, "personal", "Mine", Provider::Codex).unwrap();
+    let cfg = parse(&out);
+    assert_eq!(cfg.profiles["personal"].provider, Provider::Codex);
+    assert!(out.contains("provider = \"codex\""), "{out}");
+}
+
+#[test]
+fn a_claude_profile_carries_no_provider_key() {
+    // A config written today should read like one written before Codex
+    // support, so nothing about existing installs changes.
+    let out = add_profile(WITH_COMMENTS, "personal", "Mine", Provider::Claude).unwrap();
+    assert!(!out.contains("provider"), "{out}");
+}
+
+#[test]
+fn a_starter_config_declares_the_codex_source() {
+    let cfg = parse(&starter_config(&[]));
+    assert_eq!(cfg.source_dir(Provider::Codex), home().join(".codex"));
 }

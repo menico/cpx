@@ -4,8 +4,8 @@
 //! the pieces fit together.
 
 use crate::binding::{BindError, Bindings};
-use crate::config::Config;
-use crate::discovery::resolve_claude_binary;
+use crate::config::{Config, Provider};
+use crate::discovery::resolve_binary;
 use crate::doctor::Ambient;
 use crate::error::ConfigError;
 use crate::layout::Layout;
@@ -117,18 +117,35 @@ impl Install {
         Ok(self.bindings.save(&self.layout.bindings_file())?)
     }
 
-    /// The real Claude binary, falling back to a bare `claude` so a wrapper is
-    /// still written and `doctor` can report the problem.
+    /// The real binary for a provider, falling back to its bare name so a
+    /// wrapper is still written and `doctor` can report the problem.
+    pub fn binary(&self, provider: Provider) -> PathBuf {
+        resolve_binary(&path_var(), &self.layout, provider)
+            .unwrap_or_else(|| PathBuf::from(provider.binary_name()))
+    }
+
+    /// The real Claude binary, or a bare `claude`.
     pub fn claude_binary(&self) -> PathBuf {
-        resolve_claude_binary(&path_var(), &self.layout).unwrap_or_else(|| PathBuf::from("claude"))
+        self.binary(Provider::Claude)
+    }
+
+    /// The options `apply` needs, with every binary resolved.
+    pub fn apply_options(&self, sync: bool) -> crate::materialize::ApplyOptions {
+        crate::materialize::ApplyOptions {
+            sync,
+            claude_binary: self.binary(Provider::Claude),
+            codex_binary: self.binary(Provider::Codex),
+        }
     }
 
     pub fn ambient(&self) -> Ambient {
         Ambient {
             path: path_var(),
             claude_config_dir: std::env::var("CLAUDE_CONFIG_DIR").ok(),
+            codex_home: std::env::var("CODEX_HOME").ok(),
             direnv_present: which("direnv").is_some(),
-            claude_binary: resolve_claude_binary(&path_var(), &self.layout),
+            claude_binary: resolve_binary(&path_var(), &self.layout, Provider::Claude),
+            codex_binary: resolve_binary(&path_var(), &self.layout, Provider::Codex),
         }
     }
 }

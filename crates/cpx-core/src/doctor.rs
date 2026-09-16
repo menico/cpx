@@ -1,7 +1,7 @@
 //! Diagnostics.
 
 use crate::binding::{self, Bindings};
-use crate::config::Config;
+use crate::config::{Config, Provider};
 use crate::layout::Layout;
 use crate::state::State;
 use serde::Serialize;
@@ -33,10 +33,30 @@ pub struct Ambient {
     pub path: String,
     /// `CLAUDE_CONFIG_DIR` in the invoking environment, if set.
     pub claude_config_dir: Option<String>,
+    /// `CODEX_HOME` in the invoking environment, if set.
+    pub codex_home: Option<String>,
     /// Whether `direnv` was found.
     pub direnv_present: bool,
     /// The resolved Claude binary, if one was found.
     pub claude_binary: Option<PathBuf>,
+    /// The resolved Codex binary, if one was found.
+    pub codex_binary: Option<PathBuf>,
+}
+
+impl Ambient {
+    fn binary(&self, provider: Provider) -> Option<&PathBuf> {
+        match provider {
+            Provider::Claude => self.claude_binary.as_ref(),
+            Provider::Codex => self.codex_binary.as_ref(),
+        }
+    }
+
+    fn home_override(&self, provider: Provider) -> Option<&String> {
+        match provider {
+            Provider::Claude => self.claude_config_dir.as_ref(),
+            Provider::Codex => self.codex_home.as_ref(),
+        }
+    }
 }
 
 fn ok(name: impl Into<String>, detail: impl Into<String>) -> Check {
@@ -79,25 +99,43 @@ fn broken_links(dir: &std::path::Path) -> Vec<PathBuf> {
 }
 
 fn check_environment(config: &Config, ambient: &Ambient, checks: &mut Vec<Check>) {
-    if config.source_dir.is_dir() {
-        checks.push(ok("source directory", config.source_dir.display().to_string()));
-    } else {
-        checks.push(finding(
-            Severity::Error,
-            "source directory",
-            format!("{} does not exist", config.source_dir.display()),
-            "point `source_dir` at your real Claude config directory in config.toml",
-        ));
-    }
+    for provider in config.providers_in_use() {
+        let source = config.source_dir(provider);
+        let label = provider.short_name();
+        if source.is_dir() {
+            checks.push(ok(format!("{label} source directory"), source.display().to_string()));
+        } else {
+            checks.push(finding(
+                Severity::Error,
+                format!("{label} source directory"),
+                format!("{} does not exist", source.display()),
+                format!(
+                    "point `source_dir` at your real {label} directory in config.toml"
+                ),
+            ));
+        }
 
-    match &ambient.claude_binary {
-        Some(path) => checks.push(ok("Claude binary", path.display().to_string())),
-        None => checks.push(finding(
-            Severity::Error,
-            "Claude binary",
-            "no `claude` executable found on PATH",
-            "install Claude Code, or put it on PATH; wrappers exec it by absolute path",
-        )),
+        match ambient.binary(provider) {
+            Some(path) => checks.push(ok(format!("{label} binary"), path.display().to_string())),
+            None => checks.push(finding(
+                Severity::Error,
+                format!("{label} binary"),
+                format!("no `{}` executable found on PATH", provider.binary_name()),
+                format!("install {label}, or put it on PATH; wrappers exec it by absolute path"),
+            )),
+        }
+
+        let var = provider.home_env_var();
+        if let Some(dir) = ambient.home_override(provider) {
+            checks.push(finding(
+                Severity::Warning,
+                var,
+                format!("{var} is set to {dir} in this shell, which overrides whichever profile you think you are using"),
+                format!("unset {var}, or leave the directory whose .envrc sets it"),
+            ));
+        } else {
+            checks.push(ok(var, "not set in this shell"));
+        }
     }
 
     let on_path = ambient
@@ -115,17 +153,6 @@ fn check_environment(config: &Config, ambient: &Ambient, checks: &mut Vec<Check>
         ));
     }
 
-    if let Some(dir) = &ambient.claude_config_dir {
-        checks.push(finding(
-            Severity::Warning,
-            "CLAUDE_CONFIG_DIR",
-            format!("CLAUDE_CONFIG_DIR is set to {dir} in this shell, which overrides whichever profile you think you are using"),
-            "unset CLAUDE_CONFIG_DIR, or leave the directory whose .envrc sets it",
-        ));
-    } else {
-        checks.push(ok("CLAUDE_CONFIG_DIR", "not set in this shell"));
-    }
-
     if ambient.direnv_present {
         checks.push(ok("direnv", "installed"));
     } else {
@@ -139,7 +166,7 @@ fn check_environment(config: &Config, ambient: &Ambient, checks: &mut Vec<Check>
 }
 
 fn check_profiles(config: &Config, layout: &Layout, checks: &mut Vec<Check>) {
-    for name in config.profiles.keys() {
+    for (name, profile) in &config.profiles {
         let dir = config.config_dir(layout, name);
         if !dir.is_dir() {
             checks.push(finding(
@@ -173,16 +200,20 @@ fn check_profiles(config: &Config, layout: &Layout, checks: &mut Vec<Check>) {
             ));
         }
 
-        let status = crate::credentials::status(&dir, &layout.home);
+        let status = crate::credentials::status_for(profile.provider, &dir, &layout.home);
         if status.authenticated {
             let who = status.account.unwrap_or_else(|| "signed in".to_string());
             checks.push(ok(format!("profile {name} login"), who));
         } else {
+            let login = match profile.provider {
+                Provider::Claude => "auth login",
+                Provider::Codex => "login",
+            };
             checks.push(finding(
                 Severity::Warning,
                 format!("profile {name} login"),
                 format!("{name} has no credentials yet"),
-                format!("run `{}{name} auth login`", config.wrapper_prefix),
+                format!("run `{} {login}`", config.command_name(name)),
             ));
         }
     }
@@ -192,16 +223,15 @@ fn check_bin_dir(config: &Config, state: &State, checks: &mut Vec<Check>) {
     let Ok(entries) = std::fs::read_dir(&config.bin_dir) else {
         return;
     };
-    let live: Vec<String> = config
-        .profiles
-        .keys()
-        .map(|n| format!("{}{}", config.wrapper_prefix, n))
-        .collect();
+    let live: Vec<String> = config.profiles.keys().map(|n| config.command_name(n)).collect();
+    let prefixes: Vec<&str> = Provider::ALL.iter().map(|p| config.wrapper_prefix(*p)).collect();
 
     let mut found: Vec<(String, PathBuf)> = entries
         .flatten()
         .map(|e| (e.file_name().to_string_lossy().to_string(), e.path()))
-        .filter(|(name, _)| name.starts_with(&config.wrapper_prefix) && !live.contains(name))
+        .filter(|(name, _)| {
+            prefixes.iter().any(|p| name.starts_with(p)) && !live.contains(name)
+        })
         .collect();
     found.sort();
 
@@ -217,12 +247,15 @@ fn check_bin_dir(config: &Config, state: &State, checks: &mut Vec<Check>) {
                 "run `cpx apply` to remove it",
             ));
         } else {
+            let bare = prefixes
+                .iter()
+                .find_map(|p| name.strip_prefix(p))
+                .unwrap_or(&name);
             checks.push(finding(
                 Severity::Warning,
                 format!("foreign wrapper {name}"),
                 format!("{} was not generated by cpx and will never be touched", path.display()),
-                format!("nothing to do, unless you want a cpx profile named `{}` — that name is taken",
-                    name.strip_prefix(&config.wrapper_prefix).unwrap_or(&name)),
+                format!("nothing to do, unless you want a cpx profile named `{bare}` — that name is taken"),
             ));
         }
     }

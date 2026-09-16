@@ -327,8 +327,8 @@ fn the_wrapper_execs_the_configured_claude_binary() {
         WORK,
         &State::default(),
         &ApplyOptions {
-            sync: false,
             claude_binary: PathBuf::from("/opt/claude/bin/claude"),
+            ..Default::default()
         },
     );
     match action_for(&plan, ".local/bin/claude-work") {

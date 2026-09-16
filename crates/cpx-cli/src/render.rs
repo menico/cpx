@@ -3,12 +3,38 @@
 
 use cpx_core::doctor::{Check, Severity};
 use cpx_core::plan::{Action, Plan, Risk};
+use serde_json::json;
 
 pub fn risk_label(risk: Risk) -> &'static str {
     match risk {
         Risk::Safe => "     ",
         Risk::OverwritesGenerated => "  ~  ",
         Risk::OverwritesForeign => "  !  ",
+    }
+}
+
+/// The name the app shows for a risk level.
+pub fn risk_name(risk: Risk) -> &'static str {
+    match risk {
+        Risk::Safe => "safe",
+        Risk::OverwritesGenerated => "generated",
+        Risk::OverwritesForeign => "foreign",
+    }
+}
+
+/// The leading word of a plan line: what is about to happen.
+pub fn action_verb(action: &Action) -> &'static str {
+    match action {
+        Action::CreateDir { .. } => "create",
+        Action::Symlink { .. } => "link",
+        Action::CopyFile { .. } | Action::CopyTree { .. } => "copy",
+        Action::WriteFile { .. } => "write",
+        Action::Backup { .. } => "back up",
+        Action::RemoveGenerated { .. } => "remove",
+        Action::WriteEnvrcBlock { .. } => "bind",
+        Action::RemoveEnvrcBlock { .. } => "unbind",
+        Action::GitInfoExclude { .. } => "exclude",
+        Action::RunDirenvAllow { .. } => "allow",
     }
 }
 
@@ -30,6 +56,22 @@ pub fn action_summary(action: &Action) -> String {
         }
         Action::RunDirenvAllow { dir } => format!("direnv  allow {}", dir.display()),
     }
+}
+
+/// The plan as the app renders it: one typed line per action.
+pub fn plan_json(plan: &Plan) -> serde_json::Value {
+    json!({
+        "actions": plan.actions.iter().map(|a| json!({
+            "risk": risk_name(a.risk),
+            "verb": action_verb(&a.action),
+            "target": a.action.target(),
+            "description": a.description,
+            "profile": a.owner,
+        })).collect::<Vec<_>>(),
+        "pendingActions": plan.actions.len(),
+        "notes": plan.notes,
+        "requiresForce": plan.requires_force(),
+    })
 }
 
 pub fn print_plan(plan: &Plan) {

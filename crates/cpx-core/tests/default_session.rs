@@ -96,3 +96,55 @@ fn a_missing_default_directory_reports_no_account() {
     assert!(!session.signed_in);
     assert_eq!(session.account, None);
 }
+
+// --- both tools ---
+
+use cpx_core::config::Provider;
+use cpx_core::default_session::default_sessions;
+
+#[test]
+fn only_claude_is_reported_when_there_is_no_codex_at_all() {
+    let d = env();
+    set_keychain_lookup(|_, _| false);
+    let sessions = default_sessions(&Layout::new(d.path()), &config("version = 1\n", d.path()));
+    assert_eq!(sessions.len(), 1);
+    assert_eq!(sessions[0].provider, Provider::Claude);
+}
+
+#[test]
+fn an_existing_codex_home_is_reported_with_its_account() {
+    let d = env();
+    set_keychain_lookup(|_, _| false);
+    fs::create_dir_all(d.path().join(".codex")).unwrap();
+    fs::write(d.path().join(".codex/auth.json"), r#"{"OPENAI_API_KEY":"sk"}"#).unwrap();
+    let sessions = default_sessions(&Layout::new(d.path()), &config("version = 1\n", d.path()));
+    assert_eq!(sessions.len(), 2);
+    let codex = &sessions[1];
+    assert_eq!(codex.provider, Provider::Codex);
+    assert_eq!(codex.dir, d.path().join(".codex"));
+    assert!(codex.signed_in);
+    assert!(codex.is_source);
+}
+
+#[test]
+fn a_codex_profile_makes_the_codex_home_worth_reporting_even_before_it_exists() {
+    let d = env();
+    set_keychain_lookup(|_, _| false);
+    let cfg = config("version = 1\n[profiles.gpt]\nprovider = \"codex\"\n", d.path());
+    let sessions = default_sessions(&Layout::new(d.path()), &cfg);
+    assert_eq!(sessions.len(), 2);
+    assert!(!sessions[1].signed_in);
+}
+
+#[test]
+fn a_profile_adopting_the_codex_home_claims_it() {
+    let d = env();
+    set_keychain_lookup(|_, _| false);
+    fs::create_dir_all(d.path().join(".codex")).unwrap();
+    let cfg = config(
+        "version = 1\n[profiles.base]\nprovider = \"codex\"\ndir = \"~/.codex\"\n",
+        d.path(),
+    );
+    let sessions = default_sessions(&Layout::new(d.path()), &cfg);
+    assert_eq!(sessions[1].claimed_by.as_deref(), Some("base"));
+}

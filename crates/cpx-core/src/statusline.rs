@@ -10,7 +10,7 @@
 //! would be overwritten on update. Instead it generates a wrapper that prints
 //! a profile badge and then delegates, forwarding stdin unchanged.
 
-use crate::config::{Config, ResourceKey, ResourceMode};
+use crate::config::{Config, Provider, ResourceKey, ResourceMode};
 use crate::layout::Layout;
 use crate::wrapper::sh_quote;
 use serde_json::Value;
@@ -153,6 +153,9 @@ pub enum StatusLineError {
     #[error("no profile named `{0}`")]
     UnknownProfile(String),
 
+    #[error("`{0}` is a Codex profile, and Codex has no statusline")]
+    NotClaude(String),
+
     #[error("could not read {path}: {source}")]
     Read {
         path: PathBuf,
@@ -250,7 +253,7 @@ pub fn plan_install(
 ) -> Result<Installation, StatusLineError> {
     let (script_path, settings_path, write, label, color) = match target {
         Target::Base => {
-            let settings = config.source_dir.join("settings.json");
+            let settings = config.source_dir(Provider::Claude).join("settings.json");
             (
                 layout.root.join("statusline-base.sh"),
                 settings.clone(),
@@ -264,6 +267,9 @@ pub fn plan_install(
                 .profiles
                 .get(name)
                 .ok_or_else(|| StatusLineError::UnknownProfile(name.clone()))?;
+            if profile.provider != Provider::Claude {
+                return Err(StatusLineError::NotClaude(name.clone()));
+            }
 
             let uses_merge = profile
                 .resources
@@ -307,7 +313,7 @@ pub fn plan_install(
             match patched {
                 Some(command) => Some(command),
                 // Nothing of ours yet: the merged file inherits the base one.
-                None => command_in(&config.source_dir.join("settings.json"))?,
+                None => command_in(&config.source_dir(Provider::Claude).join("settings.json"))?,
             }
         }
         _ => command_in(&settings_path)?,
@@ -325,7 +331,7 @@ pub fn plan_install(
     // the base configures, so that is what a first install should wrap.
     let delegate = match (delegate, target) {
         (None, Target::Profile(_)) if !replacing => command_in(
-            &config.source_dir.join("settings.json"),
+            &config.source_dir(Provider::Claude).join("settings.json"),
         )?
         .map(|command| Delegate { command }),
         (delegate, _) => delegate,

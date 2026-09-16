@@ -1,20 +1,28 @@
-//! Finding the real Claude binary.
+//! Finding the real Claude and Codex binaries.
 //!
-//! Wrappers exec Claude by absolute path, so resolving that path must never
+//! Wrappers exec the tool by absolute path, so resolving that path must never
 //! land on one of cpx's own wrappers or shims — that is exactly the recursion
 //! the absolute path exists to prevent.
 
+use crate::config::Provider;
 use crate::layout::Layout;
 use crate::state::has_marker;
 use std::path::{Path, PathBuf};
 
-/// The first entry on `path` named `claude` that cpx did not generate.
-pub fn resolve_claude_binary(path_var: &str, layout: &Layout) -> Option<PathBuf> {
+/// The first entry on `path` named after the provider's binary that cpx did
+/// not generate.
+pub fn resolve_binary(path_var: &str, layout: &Layout, provider: Provider) -> Option<PathBuf> {
+    let name = provider.binary_name();
     path_var
         .split(':')
         .filter(|entry| !entry.is_empty())
-        .map(|entry| Path::new(entry).join("claude"))
+        .map(|entry| Path::new(entry).join(name))
         .find(|candidate| is_executable(candidate) && !is_cpx_script(candidate, layout))
+}
+
+/// The first entry on `path` named `claude` that cpx did not generate.
+pub fn resolve_claude_binary(path_var: &str, layout: &Layout) -> Option<PathBuf> {
+    resolve_binary(path_var, layout, Provider::Claude)
 }
 
 fn is_executable(path: &Path) -> bool {

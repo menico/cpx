@@ -28,6 +28,9 @@ pub enum SkillError {
     #[error("a skill named `{0}` is already there")]
     AlreadyExists(String),
 
+    #[error("`{0}` is a Codex profile; Codex has no plugins to switch")]
+    NoPlugins(String),
+
     #[error("{path}: {source}")]
     Io {
         path: PathBuf,
@@ -211,9 +214,11 @@ pub fn inventory(
     layout: &Layout,
     profile: &str,
 ) -> Result<Inventory, SkillError> {
-    if !config.profiles.contains_key(profile) {
-        return Err(SkillError::UnknownProfile(profile.to_string()));
-    }
+    let provider = config
+        .profiles
+        .get(profile)
+        .map(|p| p.provider)
+        .ok_or_else(|| SkillError::UnknownProfile(profile.to_string()))?;
     let config_dir = config.config_dir(layout, profile);
     let skills_dir = config_dir.join("skills");
 
@@ -221,7 +226,12 @@ pub fn inventory(
     own.extend(skills_in(&config_dir.join(DISABLED_DIR), false));
     own.sort_by(|a, b| a.name.cmp(&b.name));
 
-    let enabled_plugins = enabled_plugins_of(&config_dir);
+    // Codex keeps skills the same way but has no `enabledPlugins`, so its
+    // plugin list is simply empty rather than a guess.
+    let enabled_plugins = match provider {
+        crate::config::Provider::Claude => enabled_plugins_of(&config_dir),
+        crate::config::Provider::Codex => BTreeMap::new(),
+    };
 
     Ok(Inventory {
         // A symlinked skills directory is someone else's too, so switching a
@@ -347,6 +357,9 @@ pub fn set_plugin_enabled(
         .profiles
         .get(profile)
         .ok_or_else(|| SkillError::UnknownProfile(profile.to_string()))?;
+    if profile_config.provider != crate::config::Provider::Claude {
+        return Err(SkillError::NoPlugins(profile.to_string()));
+    }
 
     let merged = profile_config
         .resources

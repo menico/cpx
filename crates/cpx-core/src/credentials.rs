@@ -1,9 +1,12 @@
 //! Where a profile's login lives, and which account it belongs to.
 //!
-//! Status only: no token value is ever read. On macOS the Keychain lookup
-//! deliberately omits `-w`, so nothing is returned and no access prompt
-//! appears.
+//! Status only: no token value is ever read by these functions. On macOS the
+//! Claude Keychain lookup deliberately omits `-w`, so nothing is returned and
+//! no access prompt appears. Codex keeps its login in a plain `auth.json`,
+//! whose identity token names the account; the file is parsed for that name
+//! and nothing else.
 
+use crate::config::Provider;
 use serde::Serialize;
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
@@ -25,6 +28,8 @@ fn account_is_valid(name: &str) -> bool {
 pub enum CredentialSource {
     Keychain,
     File,
+    /// Codex signed in with an API key rather than an account.
+    ApiKey,
     None,
 }
 
@@ -32,9 +37,12 @@ pub enum CredentialSource {
 pub struct CredentialStatus {
     pub authenticated: bool,
     pub source: CredentialSource,
-    /// The signed-in email, when Claude Code has recorded one.
+    /// The signed-in email, when the tool has recorded one.
     pub account: Option<String>,
     pub organization: Option<String>,
+    /// The subscription, when the credentials say (`plus`, `pro`, `team`…).
+    /// Codex writes it into its identity token; Claude does not record it.
+    pub plan: Option<String>,
     /// Only knowable from a credentials file; the Keychain is not read.
     pub expired: Option<bool>,
 }
@@ -144,19 +152,30 @@ pub fn account_from_claude_json(profile_dir: &Path, home: &Path) -> (Option<Stri
     (None, None)
 }
 
+fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
+
 /// Whether the credentials file records an expiry in the past.
 fn file_expired(path: &Path) -> Option<bool> {
     let text = std::fs::read_to_string(path).ok()?;
     let value: serde_json::Value = serde_json::from_str(&text).ok()?;
     let expires_ms = value.pointer("/claudeAiOauth/expiresAt")?.as_i64()?;
-    let now_ms = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .ok()?
-        .as_millis() as i64;
-    Some(expires_ms <= now_ms)
+    Some(expires_ms <= now_ms())
 }
 
-/// Full credential status for one profile directory.
+/// Full credential status for one profile directory of the given provider.
+pub fn status_for(provider: Provider, profile_dir: &Path, home: &Path) -> CredentialStatus {
+    match provider {
+        Provider::Claude => status(profile_dir, home),
+        Provider::Codex => codex_status(profile_dir),
+    }
+}
+
+/// Full credential status for one Claude profile directory.
 ///
 /// `home` is needed to recognise the default config directory, whose token
 /// lives under the unsuffixed Keychain service.
@@ -172,6 +191,7 @@ pub fn status(profile_dir: &Path, home: &Path) -> CredentialStatus {
             source: CredentialSource::Keychain,
             account,
             organization,
+            plan: None,
             // The Keychain entry is never read, so its expiry is unknowable
             // without prompting the user — which is not worth it for a status.
             expired: None,
@@ -185,6 +205,7 @@ pub fn status(profile_dir: &Path, home: &Path) -> CredentialStatus {
             source: CredentialSource::File,
             account,
             organization,
+            plan: None,
             expired: file_expired(&file),
         };
     }
@@ -194,6 +215,7 @@ pub fn status(profile_dir: &Path, home: &Path) -> CredentialStatus {
         source: CredentialSource::None,
         account,
         organization,
+        plan: None,
         expired: None,
     }
 }
@@ -201,4 +223,111 @@ pub fn status(profile_dir: &Path, home: &Path) -> CredentialStatus {
 /// The credentials file used on Linux and in CI.
 pub fn credentials_file(profile_dir: &Path) -> PathBuf {
     profile_dir.join(".credentials.json")
+}
+
+/// Where Codex keeps its login.
+pub fn codex_auth_file(home_dir: &Path) -> PathBuf {
+    home_dir.join("auth.json")
+}
+
+/// The claims of a JWT, without verifying it. Enough to read who a token
+/// was issued to; never used to decide whether to trust it.
+pub fn jwt_claims(token: &str) -> Option<serde_json::Value> {
+    use base64::Engine;
+    let payload = token.split('.').nth(1)?;
+    let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(payload.trim_end_matches('='))
+        .ok()?;
+    serde_json::from_slice(&bytes).ok()
+}
+
+/// What Codex's `auth.json` says about the account.
+///
+/// Codex signs in either through ChatGPT — leaving OAuth tokens whose
+/// identity token names the email and plan — or with an API key, which
+/// names nobody.
+pub fn codex_status(home_dir: &Path) -> CredentialStatus {
+    let none = CredentialStatus {
+        authenticated: false,
+        source: CredentialSource::None,
+        account: None,
+        organization: None,
+        plan: None,
+        expired: None,
+    };
+
+    let Ok(text) = std::fs::read_to_string(codex_auth_file(home_dir)) else {
+        return none;
+    };
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) else {
+        return none;
+    };
+
+    let tokens = value.get("tokens").filter(|t| t.is_object());
+    let access = tokens
+        .and_then(|t| t.get("access_token"))
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty());
+
+    if let Some(access) = access {
+        let id_claims = tokens
+            .and_then(|t| t.get("id_token"))
+            .and_then(|v| v.as_str())
+            .and_then(jwt_claims);
+        let auth = id_claims
+            .as_ref()
+            .and_then(|c| c.get("https://api.openai.com/auth"));
+        let organization = auth
+            .and_then(|a| a.get("organizations"))
+            .and_then(|o| o.as_array())
+            .and_then(|orgs| {
+                orgs.iter()
+                    .find(|o| o.get("is_default").and_then(|d| d.as_bool()) == Some(true))
+                    .or(orgs.first())
+            })
+            .and_then(|o| o.get("title"))
+            .and_then(|t| t.as_str())
+            .map(str::to_string);
+        let expired = jwt_claims(access)
+            .and_then(|c| c.get("exp")?.as_i64())
+            .map(|exp| exp * 1000 <= now_ms());
+
+        return CredentialStatus {
+            authenticated: true,
+            source: CredentialSource::File,
+            account: id_claims
+                .as_ref()
+                .and_then(|c| c.get("email"))
+                .and_then(|v| v.as_str())
+                .map(str::to_string),
+            organization,
+            plan: auth
+                .and_then(|a| a.get("chatgpt_plan_type"))
+                .and_then(|v| v.as_str())
+                .map(str::to_string),
+            expired,
+        };
+    }
+
+    let api_key = value
+        .get("OPENAI_API_KEY")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty());
+    if api_key.is_some() {
+        return CredentialStatus {
+            authenticated: true,
+            source: CredentialSource::ApiKey,
+            ..none
+        };
+    }
+
+    none
+}
+
+/// Where a profile's login is kept, for showing rather than reading.
+pub fn location(provider: Provider, profile_dir: &Path, home: &Path) -> String {
+    match provider {
+        Provider::Claude => format!("Keychain: {}", keychain_service_for(profile_dir, home)),
+        Provider::Codex => codex_auth_file(profile_dir).display().to_string(),
+    }
 }

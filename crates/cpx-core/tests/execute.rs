@@ -64,8 +64,8 @@ impl Env {
 
     fn apply_with(&mut self, toml: &str, opts: &ExecuteOptions) -> Result<(), ExecError> {
         let plan = self.plan(toml);
-        let source = self.source();
-        execute(&plan, &mut self.state, &source, opts).map(|_| ())
+        let sources = vec![self.source()];
+        execute(&plan, &mut self.state, &sources, opts).map(|_| ())
     }
 
     fn profile(&self, name: &str) -> PathBuf {
@@ -189,8 +189,8 @@ fn a_plan_that_writes_into_the_source_directory_is_rejected_whole() {
         None,
     );
 
-    let source = env.source();
-    let err = execute(&plan, &mut env.state, &source, &ExecuteOptions::default()).unwrap_err();
+    let sources = vec![env.source()];
+    let err = execute(&plan, &mut env.state, &sources, &ExecuteOptions::default()).unwrap_err();
     assert!(matches!(err, ExecError::WritesIntoSource { .. }), "{err:?}");
     assert_eq!(
         fs::read_to_string(&victim).unwrap(),
@@ -294,8 +294,8 @@ fn removing_something_cpx_did_not_generate_is_refused() {
         None,
     );
 
-    let source = env.source();
-    let err = execute(&plan, &mut env.state, &source, &ExecuteOptions { force: true }).unwrap_err();
+    let sources = vec![env.source()];
+    let err = execute(&plan, &mut env.state, &sources, &ExecuteOptions { force: true }).unwrap_err();
     assert!(matches!(err, ExecError::NotOurs { .. }), "{err:?}");
     assert_eq!(fs::read_to_string(&victim).unwrap(), "irreplaceable");
 }

@@ -478,9 +478,9 @@ fn the_generated_wrapper_from_a_plan_actually_runs() {
     let env = Env::new();
     let d = TempDir::new().unwrap();
     let inner = write_script(d.path(), "inner.sh", "#!/bin/sh\nprintf 'REAL'\n");
-    let toml = format!(
+    let toml =
         "version = 1\n[profiles.work]\ncolor = \"#5dc794\"\n[profiles.work.resources]\nsettings = \"own\"\n"
-    );
+            .to_string();
     let config = env.config(&toml);
     let layout = env.layout();
 

@@ -43,7 +43,7 @@ fn harness(toml: &str, name: &str) -> Harness {
         name,
         profile: &cfg.profiles[name],
         profile_dir: &profile_dir,
-        claude_binary: &fake_claude,
+        binary: &fake_claude,
     });
     let wrapper = bin_dir.join(format!("claude-{name}"));
     fs::write(&wrapper, script).unwrap();

@@ -1,7 +1,7 @@
 //! Adoption: taking over a directory without changing anything in it.
 
 use cpx_core::adopt::*;
-use cpx_core::config::{Config, ResourceKey, ResourceMode};
+use cpx_core::config::{Config, Provider, ResourceKey, ResourceMode};
 use cpx_core::execute::{execute, ExecuteOptions};
 use cpx_core::layout::Layout;
 use cpx_core::materialize::{plan_apply, ApplyOptions};
@@ -53,8 +53,17 @@ impl Env {
         self.home().join(".claude-hd")
     }
 
+    /// A config whose sources are this home's `~/.claude` and `~/.codex`.
+    fn config(&self) -> Config {
+        Config::parse("version = 1\n", self.home()).unwrap()
+    }
+
     fn inspect(&self) -> Adoption {
-        inspect(&self.adopted(), &self.source(), None).expect("adoption should be possible")
+        inspect(&self.adopted(), &self.config(), None).expect("adoption should be possible")
+    }
+
+    fn candidates(&self) -> Vec<Adoption> {
+        candidates(self.home(), &self.config(), &self.home().join(".claude-profiles"))
     }
 }
 
@@ -63,6 +72,7 @@ fn a_profile_name_is_derived_from_the_directory_name() {
     assert_eq!(derive_name(Path::new("/Users/x/.claude-hd")).as_deref(), Some("hd"));
     assert_eq!(derive_name(Path::new("/Users/x/.claude-personal")).as_deref(), Some("personal"));
     assert_eq!(derive_name(Path::new("/Users/x/work-claude")).as_deref(), Some("work-claude"));
+    assert_eq!(derive_name(Path::new("/Users/x/.codex-hd")).as_deref(), Some("hd"));
 }
 
 #[test]
@@ -75,7 +85,7 @@ fn a_directory_name_that_yields_nothing_usable_has_no_derived_name() {
 fn adopting_a_missing_directory_is_refused() {
     let env = Env::new();
     assert!(matches!(
-        inspect(&env.home().join("nope"), &env.source(), None),
+        inspect(&env.home().join("nope"), &env.config(), None),
         Err(AdoptError::Missing(_))
     ));
 }
@@ -86,7 +96,7 @@ fn adopting_a_file_is_refused() {
     let file = env.home().join("a-file");
     fs::write(&file, "x").unwrap();
     assert!(matches!(
-        inspect(&file, &env.source(), None),
+        inspect(&file, &env.config(), None),
         Err(AdoptError::NotADirectory(_))
     ));
 }
@@ -97,7 +107,7 @@ fn adopting_a_directory_that_is_not_a_claude_config_dir_is_refused() {
     let plain = env.home().join("Documents");
     fs::create_dir_all(&plain).unwrap();
     assert!(matches!(
-        inspect(&plain, &env.source(), None),
+        inspect(&plain, &env.config(), None),
         Err(AdoptError::NotAConfigDir(_))
     ));
 }
@@ -107,7 +117,7 @@ fn adopting_the_source_directory_itself_is_refused() {
     let env = Env::new();
     assert!(
         matches!(
-            inspect(&env.source(), &env.source(), None),
+            inspect(&env.source(), &env.config(), None),
             Err(AdoptError::IsSourceDir(_))
         ),
         "~/.claude is what profiles are built from"
@@ -144,7 +154,7 @@ fn resources_the_directory_does_not_have_are_ignored() {
 fn every_resource_gets_a_decision() {
     let adoption = Env::new().inspect();
     let decided: BTreeSet<_> = adoption.resources.keys().copied().collect();
-    let all: BTreeSet<_> = ResourceKey::ALL.into_iter().collect();
+    let all: BTreeSet<_> = ResourceKey::for_provider(Provider::Claude).iter().copied().collect();
     assert_eq!(decided, all);
 }
 
@@ -174,7 +184,7 @@ fn the_report_names_what_was_found() {
 #[test]
 fn an_explicit_name_overrides_the_derived_one() {
     let env = Env::new();
-    let adoption = inspect(&env.adopted(), &env.source(), Some("work")).unwrap();
+    let adoption = inspect(&env.adopted(), &env.config(), Some("work")).unwrap();
     assert_eq!(adoption.name, "work");
 }
 
@@ -242,7 +252,7 @@ fn applying_an_adopted_profile_leaves_its_contents_untouched() {
 
     let before = fs::read_to_string(env.adopted().join("settings.json")).unwrap();
     let plan = plan_apply(&config, &layout, &state, &ApplyOptions::default()).unwrap();
-    execute(&plan, &mut state, &config.source_dir, &ExecuteOptions::default()).unwrap();
+    execute(&plan, &mut state, &config.source_dirs(), &ExecuteOptions::default()).unwrap();
 
     assert_eq!(
         fs::read_to_string(env.adopted().join("settings.json")).unwrap(),
@@ -270,7 +280,7 @@ fn the_wrapper_for_an_adopted_profile_points_at_the_adopted_directory() {
     let mut state = State::default();
 
     let plan = plan_apply(&config, &layout, &state, &ApplyOptions::default()).unwrap();
-    execute(&plan, &mut state, &config.source_dir, &ExecuteOptions::default()).unwrap();
+    execute(&plan, &mut state, &config.source_dirs(), &ExecuteOptions::default()).unwrap();
 
     let wrapper = fs::read_to_string(env.home().join(".local/bin/claude-hd")).unwrap();
     assert!(
@@ -300,7 +310,7 @@ fn applying_an_adopted_profile_converges() {
     let mut state = State::default();
 
     let plan = plan_apply(&config, &layout, &state, &ApplyOptions::default()).unwrap();
-    execute(&plan, &mut state, &config.source_dir, &ExecuteOptions::default()).unwrap();
+    execute(&plan, &mut state, &config.source_dirs(), &ExecuteOptions::default()).unwrap();
 
     let again = plan_apply(&config, &layout, &state, &ApplyOptions::default()).unwrap();
     assert!(again.is_empty(), "still planned: {:#?}", again.actions);
@@ -311,7 +321,7 @@ fn applying_an_adopted_profile_converges() {
 #[test]
 fn discovery_finds_hand_rolled_config_directories() {
     let env = Env::new();
-    let found = candidates(env.home(), &env.source(), &env.home().join(".claude-profiles"));
+    let found = env.candidates();
     assert_eq!(found.len(), 1, "{found:#?}");
     assert_eq!(found[0].name, "hd");
 }
@@ -323,7 +333,7 @@ fn discovery_skips_the_source_directory_and_the_cpx_root() {
     // The cpx root is itself full of config directories; none are adoptable.
     fs::create_dir_all(root.join("work/projects")).unwrap();
 
-    let names: Vec<_> = candidates(env.home(), &env.source(), &root)
+    let names: Vec<_> = env.candidates()
         .into_iter()
         .map(|a| a.name)
         .collect();
@@ -334,7 +344,7 @@ fn discovery_skips_the_source_directory_and_the_cpx_root() {
 fn discovery_ignores_directories_that_are_not_config_dirs() {
     let env = Env::new();
     fs::create_dir_all(env.home().join(".claude-notes")).unwrap();
-    let found = candidates(env.home(), &env.source(), &env.home().join(".claude-profiles"));
+    let found = env.candidates();
     assert!(
         found.iter().all(|a| a.name != "notes"),
         "an empty directory is not a profile: {found:#?}"
@@ -349,7 +359,7 @@ fn discovery_returns_directories_in_a_stable_order() {
         fs::create_dir_all(dir.join("projects")).unwrap();
         fs::write(dir.join("history.jsonl"), "").unwrap();
     }
-    let names: Vec<_> = candidates(env.home(), &env.source(), &env.home().join(".claude-profiles"))
+    let names: Vec<_> = env.candidates()
         .into_iter()
         .map(|a| a.name)
         .collect();
@@ -379,7 +389,7 @@ fn another_tools_directory_is_not_offered_for_adoption() {
         }
     }
 
-    let found: Vec<String> = candidates(env.home(), &env.source(), &env.home().join(".claude-profiles"))
+    let found: Vec<String> = env.candidates()
         .into_iter()
         .map(|a| a.name)
         .collect();
@@ -392,7 +402,7 @@ fn a_claude_json_alone_is_enough() {
     let dir = env.home().join(".claude-fresh");
     fs::create_dir_all(&dir).unwrap();
     fs::write(dir.join(".claude.json"), "{}").unwrap();
-    assert!(inspect(&dir, &env.source(), None).is_ok());
+    assert!(inspect(&dir, &env.config(), None).is_ok());
 }
 
 #[test]
@@ -401,7 +411,7 @@ fn two_supporting_signs_are_enough_without_a_claude_json() {
     let dir = env.home().join(".claude-old");
     fs::create_dir_all(dir.join("projects")).unwrap();
     fs::write(dir.join("history.jsonl"), "").unwrap();
-    assert!(inspect(&dir, &env.source(), None).is_ok());
+    assert!(inspect(&dir, &env.config(), None).is_ok());
 }
 
 #[test]
@@ -410,7 +420,116 @@ fn one_supporting_sign_is_not_enough() {
     let dir = env.home().join(".something");
     fs::create_dir_all(dir.join("projects")).unwrap();
     assert!(matches!(
-        inspect(&dir, &env.source(), None),
+        inspect(&dir, &env.config(), None),
         Err(AdoptError::NotAConfigDir(_))
     ));
+}
+
+
+// --- Codex homes ---
+
+fn codex_home(env: &Env, name: &str) -> PathBuf {
+    let dir = env.home().join(name);
+    fs::create_dir_all(dir.join("sessions")).unwrap();
+    fs::create_dir_all(dir.join("skills")).unwrap();
+    fs::write(dir.join("config.toml"), "model = \"gpt-5\"\n").unwrap();
+    fs::write(dir.join("auth.json"), r#"{"tokens":{"access_token":"x"}}"#).unwrap();
+    dir
+}
+
+#[test]
+fn a_codex_home_is_recognised_and_adopted_as_a_codex_profile() {
+    let env = Env::new();
+    let dir = codex_home(&env, ".codex-work");
+    let adoption = inspect(&dir, &env.config(), None).unwrap();
+    assert_eq!(adoption.provider, Provider::Codex);
+    assert_eq!(adoption.name, "work");
+    assert_eq!(adoption.resources[&ResourceKey::CodexConfig], ResourceMode::Own);
+    assert_eq!(adoption.resources[&ResourceKey::Sessions], ResourceMode::Own);
+    assert_eq!(adoption.resources[&ResourceKey::Prompts], ResourceMode::Ignore);
+    assert!(!adoption.resources.contains_key(&ResourceKey::Settings));
+    assert!(adoption.found.contains(&"config.toml".to_string()), "{:?}", adoption.found);
+}
+
+#[test]
+fn the_codex_source_directory_is_not_adoptable_either() {
+    let env = Env::new();
+    let dir = codex_home(&env, ".codex");
+    assert!(matches!(
+        inspect(&dir, &env.config(), None),
+        Err(AdoptError::IsSourceDir(_))
+    ));
+}
+
+#[test]
+fn an_auth_json_alone_marks_a_codex_home() {
+    let env = Env::new();
+    let dir = env.home().join(".codex-fresh");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(dir.join("auth.json"), "{}").unwrap();
+    assert_eq!(inspect(&dir, &env.config(), None).unwrap().provider, Provider::Codex);
+}
+
+#[test]
+fn a_config_toml_alone_is_not_a_codex_home() {
+    // ~/.cargo keeps a config.toml too.
+    let env = Env::new();
+    let dir = env.home().join(".cargo");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(dir.join("config.toml"), "[build]\n").unwrap();
+    assert!(matches!(
+        inspect(&dir, &env.config(), None),
+        Err(AdoptError::NotAConfigDir(_))
+    ));
+}
+
+#[test]
+fn discovery_offers_codex_homes_alongside_claude_directories() {
+    let env = Env::new();
+    codex_home(&env, ".codex-work");
+    let found: Vec<(String, Provider)> = env
+        .candidates()
+        .into_iter()
+        .map(|a| (a.name, a.provider))
+        .collect();
+    assert_eq!(
+        found,
+        vec![("hd".to_string(), Provider::Claude), ("work".to_string(), Provider::Codex)]
+    );
+}
+
+#[test]
+fn a_codex_home_sharing_a_name_with_a_claude_directory_is_suffixed() {
+    let env = Env::new();
+    codex_home(&env, ".codex-hd");
+    let names: Vec<String> = env.candidates().into_iter().map(|a| a.name).collect();
+    assert_eq!(names, vec!["hd", "hd-codex"]);
+}
+
+#[test]
+fn applying_an_adopted_codex_profile_writes_only_its_wrapper_and_shim() {
+    let env = Env::new();
+    fs::create_dir_all(env.home().join(".codex")).unwrap();
+    let dir = codex_home(&env, ".codex-work");
+    let adoption = inspect(&dir, &env.config(), None).unwrap();
+    let text = cpx_core::config_edit::add_adopted_profile("version = 1\n", &adoption).unwrap();
+    let config = Config::parse(&text, env.home()).unwrap();
+    assert_eq!(config.profiles["work"].provider, Provider::Codex);
+
+    let layout = Layout::new(env.home());
+    let mut state = State::default();
+    let plan = plan_apply(&config, &layout, &state, &ApplyOptions::default()).unwrap();
+    for planned in &plan.actions {
+        assert!(
+            !planned.action.target().starts_with(&dir),
+            "adoption must not touch the adopted home, but plans {}",
+            planned.action.target().display()
+        );
+    }
+    execute(&plan, &mut state, &config.source_dirs(), &ExecuteOptions::default()).unwrap();
+
+    let wrapper = fs::read_to_string(env.home().join(".local/bin/codex-work")).unwrap();
+    assert!(wrapper.contains(&format!("export CODEX_HOME='{}'", dir.display())), "{wrapper}");
+    assert!(env.home().join(".claude-profiles/work/bin/codex").is_file());
+    assert_eq!(fs::read_to_string(dir.join("config.toml")).unwrap(), "model = \"gpt-5\"\n");
 }

@@ -5,7 +5,7 @@
 //! make both harder to reason about. Comments and key order are preserved,
 //! because this is a file the user writes by hand.
 
-use crate::config::Config;
+use crate::config::{Config, Provider};
 use crate::error::ConfigError;
 use toml_edit::{DocumentMut, Item, Table};
 
@@ -36,10 +36,10 @@ fn check_name(name: &str) -> Result<(), EditError> {
     Ok(())
 }
 
-/// A starter config, with `~/.claude` as the source.
+/// A starter config, with `~/.claude` and `~/.codex` as the sources.
 pub fn starter_config(profiles: &[(String, String)]) -> String {
     let mut out = String::from(
-        "# cpx — Claude profile manager\n\
+        "# cpx — Claude Code and Codex profile manager\n\
          # Run `cpx apply` after editing. `cpx apply --dry-run` shows what would change.\n\
          version = 1\n\
          source_dir = \"~/.claude\"\n\
@@ -49,7 +49,7 @@ pub fn starter_config(profiles: &[(String, String)]) -> String {
          #   link  — symlink to source_dir (edit once, every profile sees it)\n\
          #   copy  — seeded once, then yours to diverge\n\
          #   own   — profile-private, source never consulted\n\
-         #   merge — regenerated from source JSON plus this profile's patch\n\
+         #   merge — regenerated from the source file plus this profile's patch\n\
          [defaults.resources]\n\
          settings       = \"merge\"\n\
          settings_local = \"merge\"\n\
@@ -59,7 +59,23 @@ pub fn starter_config(profiles: &[(String, String)]) -> String {
          agents         = \"link\"\n\
          plugins        = \"link\"\n\
          hooks          = \"link\"\n\
-         projects       = \"own\"\n",
+         projects       = \"own\"\n\
+         \n\
+         # Codex profiles (`provider = \"codex\"`) are built from ~/.codex the same way.\n\
+         [codex]\n\
+         source_dir = \"~/.codex\"\n\
+         \n\
+         [codex.defaults.resources]\n\
+         config      = \"merge\"\n\
+         \"AGENTS.md\" = \"copy\"\n\
+         skills      = \"link\"\n\
+         prompts     = \"link\"\n\
+         rules       = \"link\"\n\
+         hooks       = \"link\"\n\
+         hooks_json  = \"copy\"\n\
+         plugins     = \"link\"\n\
+         memories    = \"own\"\n\
+         sessions    = \"own\"\n",
     );
     for (name, description) in profiles {
         out.push_str(&format!(
@@ -81,7 +97,15 @@ fn profiles_table(doc: &mut DocumentMut) -> &mut Table {
 }
 
 /// Add an empty profile.
-pub fn add_profile(text: &str, name: &str, description: &str) -> Result<String, EditError> {
+///
+/// A Claude profile carries no `provider` key, so a config written today
+/// reads exactly like one written before Codex support.
+pub fn add_profile(
+    text: &str,
+    name: &str,
+    description: &str,
+    provider: Provider,
+) -> Result<String, EditError> {
     check_name(name)?;
     let mut doc: DocumentMut = text.parse()?;
     let profiles = profiles_table(&mut doc);
@@ -89,6 +113,9 @@ pub fn add_profile(text: &str, name: &str, description: &str) -> Result<String, 
         return Err(EditError::ProfileExists(name.to_string()));
     }
     let mut table = Table::new();
+    if provider != Provider::Claude {
+        table["provider"] = toml_edit::value(provider.as_str());
+    }
     table["description"] = toml_edit::value(description);
     profiles.insert(name, Item::Table(table));
     Ok(doc.to_string())
@@ -123,7 +150,9 @@ pub fn clone_profile(text: &str, from: &str, to: &str) -> Result<String, EditErr
     Ok(doc.to_string())
 }
 /// Fields the app may write as plain strings. Anything structured has its
-/// own function, so a typo cannot turn a table into a string.
+/// own function, so a typo cannot turn a table into a string. `provider` is
+/// deliberately absent: changing it would re-home a login, and that is a
+/// new profile rather than an edit.
 const WRITABLE_FIELDS: [&str; 3] = ["description", "model", "color"];
 
 /// Re-parse an edited document, so every rule in `Config::parse` — unknown
@@ -177,7 +206,7 @@ pub fn set_resource_mode(
     validated(doc)
 }
 
-/// Set or clear a profile's `description` or `model`.
+/// Set or clear a profile's `description`, `model` or `color`.
 pub fn set_profile_field(
     text: &str,
     profile: &str,
@@ -215,6 +244,9 @@ pub fn add_adopted_profile(
     }
 
     let mut table = Table::new();
+    if adoption.provider != Provider::Claude {
+        table["provider"] = toml_edit::value(adoption.provider.as_str());
+    }
     table["dir"] = toml_edit::value(adoption.dir.to_string_lossy().as_ref());
 
     let mut resources = Table::new();

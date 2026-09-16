@@ -3,8 +3,12 @@
 //! The registry at `<root>/bindings.toml` is the index; a managed block
 //! inside the directory's `.envrc` is the mechanism. Everything outside the
 //! block markers belongs to the user and is preserved byte-for-byte.
+//!
+//! A directory can be bound to one profile per provider — a Claude profile
+//! and a Codex profile for the same repository — and both live in the one
+//! managed block, so the file never carries two.
 
-use crate::config::Config;
+use crate::config::{Config, Provider};
 use crate::layout::Layout;
 use crate::plan::{Action, Plan, Risk};
 use crate::state::sha256_bytes;
@@ -46,9 +50,18 @@ pub enum BindError {
 pub struct Binding {
     pub path: PathBuf,
     pub profile: String,
+    /// Absent in registries written before Codex support, which only ever
+    /// held Claude profiles.
+    #[serde(default = "claude")]
+    pub provider: Provider,
     /// Hash of the block as cpx wrote it, so a hand-edit is detectable
-    /// without re-deriving the whole file.
+    /// without re-deriving the whole file. Entries sharing a directory share
+    /// a block, and so a hash.
     pub block_sha256: String,
+}
+
+fn claude() -> Provider {
+    Provider::Claude
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -72,50 +85,106 @@ pub enum BindingHealth {
     NotAllowed,
 }
 
-/// The plan to bind a directory, plus the registry entry to record on success.
+/// One profile's share of a managed block.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BlockEntry {
+    pub name: String,
+    pub provider: Provider,
+    pub profile_dir: PathBuf,
+    pub profile_bin_dir: PathBuf,
+    pub env: BTreeMap<String, String>,
+    pub color: Option<String>,
+}
+
+impl BlockEntry {
+    /// The entry for a configured profile.
+    pub fn for_profile(config: &Config, layout: &Layout, name: &str) -> Result<BlockEntry, BindError> {
+        let profile = config
+            .profiles
+            .get(name)
+            .ok_or_else(|| BindError::UnknownProfile(name.to_string()))?;
+        Ok(BlockEntry {
+            name: name.to_string(),
+            provider: profile.provider,
+            profile_dir: config.config_dir(layout, name),
+            profile_bin_dir: layout.profile_bin_dir(name),
+            env: profile.env.clone(),
+            color: profile.color.clone(),
+        })
+    }
+}
+
+/// The plan to bind a directory, plus the registry entries to record on
+/// success: the new binding, and any other provider's binding at the same
+/// directory, whose block hash has just changed.
 #[derive(Debug, Clone)]
 pub struct BindPlan {
     pub plan: Plan,
-    pub binding: Binding,
+    pub bindings: Vec<Binding>,
 }
 
-/// Render the managed block for a profile.
-pub fn render_block(
-    name: &str,
-    profile_dir: &Path,
-    profile_bin_dir: &Path,
-    env: &BTreeMap<String, String>,
-    color: Option<&str>,
-) -> String {
+/// The plan to unbind, plus the entries that stay and must be re-recorded.
+#[derive(Debug, Clone)]
+pub struct UnbindPlan {
+    pub plan: Plan,
+    /// Bindings that remain at the directory, with their refreshed hash.
+    pub remaining: Vec<Binding>,
+}
+
+/// Render the managed block for one or more profiles.
+///
+/// Entries are rendered in provider order, so a block for the same pair of
+/// profiles always reads the same however it was built up.
+pub fn render_block(entries: &[BlockEntry]) -> String {
     use std::fmt::Write;
+    let mut sorted: Vec<&BlockEntry> = entries.iter().collect();
+    sorted.sort_by_key(|e| e.provider);
+
+    let names: Vec<&str> = sorted.iter().map(|e| e.name.as_str()).collect();
     let mut s = String::new();
-    writeln!(s, "{BLOCK_BEGIN_PREFIX} {name} >>>").unwrap();
+    writeln!(s, "{BLOCK_BEGIN_PREFIX} {} >>>", names.join(", ")).unwrap();
     writeln!(s, "# Managed by cpx. Edit with `cpx bind` / `cpx unbind`;").unwrap();
     writeln!(s, "# anything outside these markers is left alone.").unwrap();
-    writeln!(
-        s,
-        "export CLAUDE_CONFIG_DIR={}",
-        sh_quote(&profile_dir.to_string_lossy())
-    )
-    .unwrap();
-    writeln!(s, "export CLAUDE_PROFILE={}", sh_quote(name)).unwrap();
-    if let Some(color) = color {
-        writeln!(s, "export CPX_PROFILE_COLOR={}", sh_quote(color)).unwrap();
+
+    for entry in &sorted {
+        if sorted.len() > 1 {
+            writeln!(s, "# {}: profile {}", entry.provider.display_name(), entry.name).unwrap();
+        }
+        writeln!(
+            s,
+            "export {}={}",
+            entry.provider.home_env_var(),
+            sh_quote(&entry.profile_dir.to_string_lossy())
+        )
+        .unwrap();
+        writeln!(
+            s,
+            "export {}={}",
+            entry.provider.profile_env_var(),
+            sh_quote(&entry.name)
+        )
+        .unwrap();
+        // Read by the Claude statusline badge; Codex has nothing that reads
+        // it, so with both bound the colour is unambiguously Claude's.
+        if let (Provider::Claude, Some(color)) = (entry.provider, &entry.color) {
+            writeln!(s, "export CPX_PROFILE_COLOR={}", sh_quote(color)).unwrap();
+        }
+        for (key, value) in &entry.env {
+            writeln!(s, "export {key}={}", sh_quote(value)).unwrap();
+        }
+        writeln!(
+            s,
+            "# Puts this profile's `{}` first, so the plain command is the right account.",
+            entry.provider.binary_name()
+        )
+        .unwrap();
+        writeln!(
+            s,
+            "PATH_add {}",
+            sh_quote(&entry.profile_bin_dir.to_string_lossy())
+        )
+        .unwrap();
     }
-    for (key, value) in env {
-        writeln!(s, "export {key}={}", sh_quote(value)).unwrap();
-    }
-    writeln!(
-        s,
-        "# Puts this profile's `claude` first, so the plain command is the right account.",
-    )
-    .unwrap();
-    writeln!(
-        s,
-        "PATH_add {}",
-        sh_quote(&profile_bin_dir.to_string_lossy())
-    )
-    .unwrap();
     write!(s, "{BLOCK_END}").unwrap();
     s
 }
@@ -247,47 +316,89 @@ impl Bindings {
         std::fs::write(path, text).map_err(io(path))
     }
 
-    pub fn get(&self, dir: &Path) -> Option<&Binding> {
-        self.entries.iter().find(|b| b.path == dir)
+    /// Every binding at `dir`, one per provider at most.
+    pub fn at(&self, dir: &Path) -> Vec<&Binding> {
+        self.entries.iter().filter(|b| b.path == dir).collect()
     }
 
+    /// The binding at `dir` for one provider.
+    pub fn find(&self, dir: &Path, provider: Provider) -> Option<&Binding> {
+        self.entries
+            .iter()
+            .find(|b| b.path == dir && b.provider == provider)
+    }
+
+    /// Whether anything at all is bound at `dir`.
+    pub fn is_bound(&self, dir: &Path) -> bool {
+        self.entries.iter().any(|b| b.path == dir)
+    }
+
+    /// Record a binding, replacing the one this directory already had for
+    /// the same provider.
     pub fn upsert(&mut self, binding: Binding) {
-        self.entries.retain(|b| b.path != binding.path);
+        self.entries
+            .retain(|b| !(b.path == binding.path && b.provider == binding.provider));
         self.entries.push(binding);
-        self.entries.sort_by(|a, b| a.path.cmp(&b.path));
+        self.entries
+            .sort_by(|a, b| a.path.cmp(&b.path).then(a.provider.cmp(&b.provider)));
     }
 
-    pub fn remove(&mut self, dir: &Path) -> Option<Binding> {
-        let index = self.entries.iter().position(|b| b.path == dir)?;
+    /// Drop every binding at `dir`, returning them.
+    pub fn remove(&mut self, dir: &Path) -> Vec<Binding> {
+        let (gone, kept): (Vec<Binding>, Vec<Binding>) =
+            self.entries.drain(..).partition(|b| b.path == dir);
+        self.entries = kept;
+        gone
+    }
+
+    /// Drop one provider's binding at `dir`.
+    pub fn remove_provider(&mut self, dir: &Path, provider: Provider) -> Option<Binding> {
+        let index = self
+            .entries
+            .iter()
+            .position(|b| b.path == dir && b.provider == provider)?;
         Some(self.entries.remove(index))
     }
 }
 
-/// Plan binding `dir` to `profile_name`.
+fn read_envrc(envrc: &Path) -> String {
+    std::fs::read_to_string(envrc).unwrap_or_default()
+}
+
+/// Plan binding `dir` to `profile_name`, keeping any other provider's
+/// binding already at `dir` in the same block.
 pub fn plan_bind(
     config: &Config,
     layout: &Layout,
+    bindings: &Bindings,
     profile_name: &str,
     dir: &Path,
 ) -> Result<BindPlan, BindError> {
-    let profile = config
-        .profiles
-        .get(profile_name)
-        .ok_or_else(|| BindError::UnknownProfile(profile_name.to_string()))?;
+    let entry = BlockEntry::for_profile(config, layout, profile_name)?;
     if !dir.is_dir() {
         return Err(BindError::NotADirectory(dir.to_path_buf()));
     }
 
-    let block = render_block(
-        profile_name,
-        &config.config_dir(layout, profile_name),
-        &layout.profile_bin_dir(profile_name),
-        &profile.env,
-        profile.color.as_deref(),
-    );
+    // Whatever else is bound here for the other provider stays, provided its
+    // profile still exists; a binding to a deleted profile is dropped rather
+    // than rendered into a block that cannot work.
+    let mut entries = vec![entry.clone()];
+    let mut kept: Vec<&Binding> = Vec::new();
+    for other in bindings.at(dir) {
+        if other.provider == entry.provider {
+            continue;
+        }
+        if let Ok(other_entry) = BlockEntry::for_profile(config, layout, &other.profile) {
+            entries.push(other_entry);
+            kept.push(other);
+        }
+    }
+
+    let block = render_block(&entries);
+    let hash = sha256_bytes(block.as_bytes());
 
     let envrc = dir.join(".envrc");
-    let existing = std::fs::read_to_string(&envrc).unwrap_or_default();
+    let existing = read_envrc(&envrc);
     let content = upsert_block(&existing, &block).map_err(|_| BindError::UnterminatedBlock {
         path: envrc.clone(),
     })?;
@@ -326,38 +437,102 @@ pub fn plan_bind(
         None,
     );
 
+    let mut recorded = vec![Binding {
+        path: dir.to_path_buf(),
+        profile: profile_name.to_string(),
+        provider: entry.provider,
+        block_sha256: hash.clone(),
+    }];
+    for other in kept {
+        recorded.push(Binding {
+            block_sha256: hash.clone(),
+            ..other.clone()
+        });
+    }
+
     Ok(BindPlan {
         plan,
-        binding: Binding {
-            path: dir.to_path_buf(),
-            profile: profile_name.to_string(),
-            block_sha256: sha256_bytes(block.as_bytes()),
-        },
+        bindings: recorded,
     })
 }
 
-/// Plan removing the binding on `dir`.
-pub fn plan_unbind(dir: &Path) -> Result<Plan, BindError> {
+/// Plan removing the binding on `dir`: one provider's, or every one.
+///
+/// When another provider's binding stays, the block is rewritten without the
+/// departed profile rather than removed.
+pub fn plan_unbind(
+    config: &Config,
+    layout: &Layout,
+    bindings: &Bindings,
+    dir: &Path,
+    provider: Option<Provider>,
+) -> Result<UnbindPlan, BindError> {
     let envrc = dir.join(".envrc");
-    let existing = std::fs::read_to_string(&envrc).unwrap_or_default();
+    let existing = read_envrc(&envrc);
+    let has_block = extract_block(&existing)
+        .map_err(|_| BindError::UnterminatedBlock {
+            path: envrc.clone(),
+        })?
+        .is_some();
+
+    let staying: Vec<&Binding> = match provider {
+        None => Vec::new(),
+        Some(provider) => bindings
+            .at(dir)
+            .into_iter()
+            .filter(|b| b.provider != provider)
+            .filter(|b| config.profiles.contains_key(&b.profile))
+            .collect(),
+    };
 
     let mut plan = Plan::default();
-    let removed = remove_block(&existing).map_err(|_| BindError::UnterminatedBlock {
-        path: envrc.clone(),
-    })?;
-    if removed.is_none() {
+    if !has_block {
         plan.note(format!("{} has no cpx block", envrc.display()));
-        return Ok(plan);
+        return Ok(UnbindPlan {
+            plan,
+            remaining: Vec::new(),
+        });
     }
 
-    plan.push(
-        Action::RemoveEnvrcBlock {
-            envrc: envrc.clone(),
-        },
-        Risk::Safe,
-        format!("unbind {}", dir.display()),
-        None,
-    );
+    let remaining = if staying.is_empty() {
+        plan.push(
+            Action::RemoveEnvrcBlock {
+                envrc: envrc.clone(),
+            },
+            Risk::Safe,
+            format!("unbind {}", dir.display()),
+            None,
+        );
+        Vec::new()
+    } else {
+        let entries: Vec<BlockEntry> = staying
+            .iter()
+            .filter_map(|b| BlockEntry::for_profile(config, layout, &b.profile).ok())
+            .collect();
+        let block = render_block(&entries);
+        let hash = sha256_bytes(block.as_bytes());
+        let content = upsert_block(&existing, &block).map_err(|_| BindError::UnterminatedBlock {
+            path: envrc.clone(),
+        })?;
+        let names: Vec<&str> = staying.iter().map(|b| b.profile.as_str()).collect();
+        plan.push(
+            Action::WriteEnvrcBlock {
+                envrc: envrc.clone(),
+                content,
+            },
+            Risk::Safe,
+            format!("unbind {} ({} stays)", dir.display(), names.join(", ")),
+            None,
+        );
+        staying
+            .iter()
+            .map(|b| Binding {
+                block_sha256: hash.clone(),
+                ..(*b).clone()
+            })
+            .collect()
+    };
+
     plan.push(
         Action::RunDirenvAllow {
             dir: dir.to_path_buf(),
@@ -366,7 +541,7 @@ pub fn plan_unbind(dir: &Path) -> Result<Plan, BindError> {
         format!("direnv allow {}", dir.display()),
         None,
     );
-    Ok(plan)
+    Ok(UnbindPlan { plan, remaining })
 }
 
 /// Assess a registry entry against what is actually on disk.

@@ -41,16 +41,18 @@ impl Env {
     fn applied(&mut self) {
         let config = self.config();
         let plan = plan_apply(&config, &self.layout, &self.state, &ApplyOptions::default()).unwrap();
-        let source = self.dir.path().join(".claude");
-        execute(&plan, &mut self.state, &source, &ExecuteOptions::default()).unwrap();
+        let sources = config.source_dirs();
+        execute(&plan, &mut self.state, &sources, &ExecuteOptions::default()).unwrap();
     }
 
     fn ambient(&self) -> Ambient {
         Ambient {
             path: self.dir.path().join(".local/bin").display().to_string(),
             claude_config_dir: None,
+            codex_home: None,
             direnv_present: true,
             claude_binary: Some(PathBuf::from("/usr/local/bin/claude")),
+            codex_binary: None,
         }
     }
 
@@ -224,6 +226,7 @@ fn a_binding_pointing_at_a_deleted_directory_is_reported() {
     bindings.upsert(cpx_core::binding::Binding {
         path: PathBuf::from("/definitely/not/here"),
         profile: "work".into(),
+        provider: cpx_core::config::Provider::Claude,
         block_sha256: "x".into(),
     });
 
@@ -253,8 +256,10 @@ fn every_check_that_fails_says_what_to_do_about_it() {
     let ambient = Ambient {
         path: "/usr/bin".to_string(),
         claude_config_dir: Some("/elsewhere".to_string()),
+        codex_home: None,
         direnv_present: false,
         claude_binary: None,
+        codex_binary: None,
     };
     for check in e.run(&ambient).iter().filter(|c| c.severity != Severity::Ok) {
         assert!(
@@ -308,4 +313,40 @@ fn the_login_check_goes_through_the_injectable_keychain_lookup() {
     cpx_core::credentials::set_keychain_lookup(|_, _| true);
     let checks = e.run(&e.ambient());
     assert_eq!(severity(&checks, "login"), Severity::Ok, "{checks:#?}");
+}
+
+
+// --- Codex ---
+
+#[test]
+fn codex_checks_only_appear_once_a_codex_profile_exists() {
+    let e = env();
+    let checks = e.run(&e.ambient());
+    assert!(find(&checks, "Codex binary").is_none(), "{checks:#?}");
+    assert!(find(&checks, "CODEX_HOME").is_none(), "{checks:#?}");
+}
+
+#[test]
+fn a_codex_profile_brings_its_own_source_binary_and_home_checks() {
+    let e = env();
+    fs::create_dir_all(e.dir.path().join(".codex")).unwrap();
+    let config = Config::parse(
+        "version = 1\n[profiles.work]\n[profiles.gpt]\nprovider = \"codex\"\n",
+        e.dir.path(),
+    )
+    .unwrap();
+    let ambient = Ambient {
+        codex_home: Some("/elsewhere".to_string()),
+        ..e.ambient()
+    };
+    fs::create_dir_all(e.layout.profile_dir("gpt")).unwrap();
+    fs::create_dir_all(e.layout.profile_dir("work")).unwrap();
+    let checks = diagnose(&config, &e.layout, &e.state, &Bindings::default(), &ambient);
+    assert_eq!(severity(&checks, "Codex binary"), Severity::Error);
+    assert_eq!(severity(&checks, "CODEX_HOME"), Severity::Warning);
+    assert_eq!(severity(&checks, "Codex source directory"), Severity::Ok);
+    assert_eq!(severity(&checks, "Claude binary"), Severity::Ok);
+    let login = find(&checks, "profile gpt login").unwrap();
+    assert_eq!(login.severity, Severity::Warning);
+    assert!(login.remedy.as_deref().unwrap().contains("codex-gpt login"), "{login:?}");
 }

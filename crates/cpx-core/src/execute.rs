@@ -53,17 +53,19 @@ fn io<'a>(action: &'a str, path: &'a Path) -> impl FnOnce(std::io::Error) -> Exe
 }
 
 /// Reject the plan as a whole before touching anything.
-fn validate(plan: &Plan, source_dir: &Path, options: &ExecuteOptions) -> Result<(), ExecError> {
-    let intruding = plan
-        .actions
-        .iter()
-        .filter(|a| a.action.target().starts_with(source_dir))
-        .count();
-    if intruding > 0 {
-        return Err(ExecError::WritesIntoSource {
-            dir: source_dir.to_path_buf(),
-            count: intruding,
-        });
+fn validate(plan: &Plan, source_dirs: &[PathBuf], options: &ExecuteOptions) -> Result<(), ExecError> {
+    for source_dir in source_dirs {
+        let intruding = plan
+            .actions
+            .iter()
+            .filter(|a| a.action.target().starts_with(source_dir))
+            .count();
+        if intruding > 0 {
+            return Err(ExecError::WritesIntoSource {
+                dir: source_dir.to_path_buf(),
+                count: intruding,
+            });
+        }
     }
 
     if !options.force {
@@ -159,14 +161,15 @@ fn copy_tree(src: &Path, dst: &Path) -> std::io::Result<()> {
 /// Run every action in `plan`, updating `state` to record what was written.
 ///
 /// The plan is validated in full before any action runs, so a rejected plan
-/// leaves the filesystem exactly as it was.
+/// leaves the filesystem exactly as it was. `source_dirs` are the
+/// directories nothing may ever write inside — one per provider.
 pub fn execute(
     plan: &Plan,
     state: &mut State,
-    source_dir: &Path,
+    source_dirs: &[PathBuf],
     options: &ExecuteOptions,
 ) -> Result<ExecuteReport, ExecError> {
-    validate(plan, source_dir, options)?;
+    validate(plan, source_dirs, options)?;
 
     let mut report = ExecuteReport::default();
 
