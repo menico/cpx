@@ -3,17 +3,22 @@
 //! Claude Code keeps its OAuth token in the Keychain under a service name
 //! derived from the config directory (see `credentials`), which is exactly
 //! what lets each profile be asked about separately. The token is read for
-//! one request. It is never refreshed here: the refresh token belongs to
-//! Claude Code, and redeeming it from a second process risks invalidating
-//! the one Claude Code holds — so an expired token is reported, with the
-//! fix being to run the profile's own command once.
+//! one request and never written back to the Keychain.
+//!
+//! macOS asks before a program may read another program's Keychain item,
+//! and asks again after Claude Code rewrites the item, which it does on
+//! every renewal. So, when asked to, cpx keeps an owner-only copy of the
+//! login under its own root and renews that copy itself, the way Claude
+//! Code renews its own — after which the Keychain is not needed until the
+//! copy is rejected outright. Without a copy, an expired login is reported
+//! with the fix being to run the profile's own command once.
 
 use super::http::retry_after_seconds;
 use super::{format_timestamp, now_epoch, parse_timestamp, ExtraUsage, Fetcher, RateWindow, Target, UsageError, UsageSnapshot};
 use crate::config::Provider;
 use crate::credentials::{keychain_account, keychain_service_for};
 use serde_json::Value;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 pub const USAGE_URL: &str = "https://api.anthropic.com/api/oauth/usage";
 const BETA_HEADER: &str = "oauth-2025-04-20";
@@ -112,6 +117,7 @@ pub fn keychain_read(_dir: &Path, _home: &Path, _prompt: bool) -> Result<Option<
 #[derive(Debug, Clone, PartialEq)]
 pub struct StoredCredentials {
     pub access_token: String,
+    pub refresh_token: Option<String>,
     /// Milliseconds since the epoch, as Claude Code writes it.
     pub expires_at_ms: Option<i64>,
     pub scopes: Vec<String>,
@@ -123,6 +129,179 @@ impl StoredCredentials {
     pub fn is_expired(&self, now_ms: i64) -> bool {
         self.expires_at_ms.is_some_and(|at| at <= now_ms)
     }
+
+    /// The same shape Claude Code writes, so a copy reads back the same way.
+    pub fn to_json(&self) -> String {
+        let mut oauth = serde_json::Map::new();
+        oauth.insert("accessToken".into(), Value::String(self.access_token.clone()));
+        if let Some(refresh) = &self.refresh_token {
+            oauth.insert("refreshToken".into(), Value::String(refresh.clone()));
+        }
+        if let Some(at) = self.expires_at_ms {
+            oauth.insert("expiresAt".into(), Value::from(at));
+        }
+        oauth.insert("scopes".into(), Value::Array(self.scopes.iter().map(|s| Value::String(s.clone())).collect()));
+        if let Some(kind) = &self.subscription_type {
+            oauth.insert("subscriptionType".into(), Value::String(kind.clone()));
+        }
+        if let Some(tier) = &self.rate_limit_tier {
+            oauth.insert("rateLimitTier".into(), Value::String(tier.clone()));
+        }
+        serde_json::json!({ "claudeAiOauth": Value::Object(oauth) }).to_string()
+    }
+}
+
+/// Where Claude Code's own OAuth client renews a token.
+pub const TOKEN_URL: &str = "https://platform.claude.com/v1/oauth/token";
+/// Claude Code's OAuth client id, which the refresh endpoint expects.
+const CLIENT_ID: &str = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
+/// A copy is refreshed this long before it would expire.
+const REFRESH_MARGIN_MS: i64 = 5 * 60 * 1000;
+
+/// Why a refresh did not produce a token.
+enum RefreshOutcome {
+    /// The provider rejected the refresh token: the copy is dead.
+    Rejected,
+    /// Something transient; the copy may still be fine later.
+    Failed(UsageError),
+}
+
+/// Renew a copied login with its refresh token.
+///
+/// This is what Claude Code itself does when its token expires, with the
+/// same client id. cpx's copy is renewed independently and never written
+/// back: Claude Code keeps renewing its own.
+fn refresh(http: &dyn super::http::Http, credentials: &StoredCredentials) -> Result<StoredCredentials, RefreshOutcome> {
+    let Some(refresh_token) = credentials.refresh_token.as_deref() else {
+        return Err(RefreshOutcome::Rejected);
+    };
+    let response = http
+        .post_form(
+            TOKEN_URL,
+            &[("Accept", "application/json")],
+            &[
+                ("grant_type", "refresh_token"),
+                ("refresh_token", refresh_token),
+                ("client_id", CLIENT_ID),
+            ],
+        )
+        .map_err(RefreshOutcome::Failed)?;
+    if response.status == 400 || response.status == 401 {
+        return Err(RefreshOutcome::Rejected);
+    }
+    if response.status != 200 {
+        return Err(RefreshOutcome::Failed(UsageError::Http {
+            status: response.status,
+            body: response.body.chars().take(400).collect(),
+        }));
+    }
+    let value: Value = serde_json::from_str(&response.body)
+        .map_err(|e| RefreshOutcome::Failed(UsageError::Parse(format!("token response: {e}"))))?;
+    let access_token = value
+        .get("access_token")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| RefreshOutcome::Failed(UsageError::Parse("token response had no access_token".into())))?;
+    let expires_in = value.get("expires_in").and_then(|v| v.as_i64()).unwrap_or(3600);
+    Ok(StoredCredentials {
+        access_token: access_token.to_string(),
+        refresh_token: value
+            .get("refresh_token")
+            .and_then(|v| v.as_str())
+            .map(str::to_string)
+            .or_else(|| credentials.refresh_token.clone()),
+        expires_at_ms: Some(now_epoch() * 1000 + expires_in * 1000),
+        scopes: credentials.scopes.clone(),
+        subscription_type: credentials.subscription_type.clone(),
+        rate_limit_tier: credentials.rate_limit_tier.clone(),
+    })
+}
+
+/// The copy of a login for one config directory.
+pub fn cache_file(cache_dir: &Path, config_dir: &Path) -> PathBuf {
+    let digest = crate::state::sha256_bytes(config_dir.as_os_str().as_encoded_bytes());
+    cache_dir.join(format!("{}.json", &digest[..16]))
+}
+
+/// Write a copy that only this user can read.
+fn write_cache(path: &Path, credentials: &StoredCredentials) -> Result<(), UsageError> {
+    use std::io::Write;
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+    let io = |e: std::io::Error| UsageError::Parse(format!("{}: {e}", path.display()));
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(io)?;
+        std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700)).map_err(io)?;
+    }
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(path)
+        .map_err(io)?;
+    file.write_all(credentials.to_json().as_bytes()).map_err(io)?;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).map_err(io)
+}
+
+/// Where a login came from, which decides what a rejection means.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Source {
+    Copy,
+    Original,
+}
+
+/// A usable login for `target`: the copy if there is a live one, renewed
+/// if it is about to expire, otherwise Claude Code's own — which is copied
+/// when copies are wanted.
+fn load_credentials(fetcher: &Fetcher, target: &Target) -> Result<(StoredCredentials, Source), UsageError> {
+    let with_command = |e: UsageError| match e {
+        UsageError::KeychainDenied { .. } => UsageError::KeychainDenied {
+            command: format!("{} auth status", target.command),
+        },
+        UsageError::KeychainNeedsPermission { .. } => UsageError::KeychainNeedsPermission {
+            command: target.command.clone(),
+        },
+        other => other,
+    };
+    let copy = fetcher.credential_cache.as_ref().map(|dir| cache_file(dir, &target.dir));
+
+    if let Some(path) = &copy {
+        if let Some(cached) = std::fs::read_to_string(path).ok().and_then(|text| parse_stored(&text).ok().flatten()) {
+            if !cached.is_expired(now_epoch() * 1000 + REFRESH_MARGIN_MS) {
+                return Ok((cached, Source::Copy));
+            }
+            match refresh(fetcher.http, &cached) {
+                Ok(renewed) => {
+                    write_cache(path, &renewed)?;
+                    return Ok((renewed, Source::Copy));
+                }
+                // A dead copy is dropped; Claude Code's own login is next.
+                Err(RefreshOutcome::Rejected) => {
+                    let _ = std::fs::remove_file(path);
+                }
+                Err(RefreshOutcome::Failed(e)) => return Err(e),
+            }
+        }
+    }
+
+    let stored = fetcher
+        .claude_credentials
+        .read(&target.dir, &fetcher.home, fetcher.keychain_prompt)
+        .map_err(with_command)?;
+    let Some(stored) = stored else {
+        return Err(UsageError::NotSignedIn);
+    };
+    let Some(credentials) = parse_stored(&stored)? else {
+        return Err(UsageError::NotSignedIn);
+    };
+    if credentials.is_expired(now_epoch() * 1000) {
+        return Err(UsageError::TokenExpired {
+            command: target.command.clone(),
+        });
+    }
+    if let Some(path) = &copy {
+        write_cache(path, &credentials)?;
+    }
+    Ok((credentials, Source::Original))
 }
 
 /// Parse what Claude Code stores. The Keychain value and the credentials
@@ -140,6 +319,11 @@ pub fn parse_stored(json: &str) -> Result<Option<StoredCredentials>, UsageError>
     };
     Ok(Some(StoredCredentials {
         access_token: access_token.to_string(),
+        refresh_token: oauth
+            .get("refreshToken")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .map(str::to_string),
         expires_at_ms: oauth.get("expiresAt").and_then(|v| v.as_f64()).map(|f| f as i64),
         scopes: oauth
             .get("scopes")
@@ -363,32 +547,23 @@ pub fn parse_usage(body: &str, account: Option<String>, plan: Option<String>, fe
 
 /// Fetch one Claude account's usage.
 pub fn fetch(fetcher: &Fetcher, target: &Target) -> Result<UsageSnapshot, UsageError> {
-    let with_command = |e: UsageError| match e {
-        UsageError::KeychainDenied { .. } => UsageError::KeychainDenied {
-            command: format!("{} auth status", target.command),
-        },
-        UsageError::KeychainNeedsPermission { .. } => UsageError::KeychainNeedsPermission {
-            command: target.command.clone(),
-        },
+    let (credentials, source) = load_credentials(fetcher, target)?;
+    match ask(fetcher, target, &credentials) {
+        // A copy the provider no longer accepts is dropped, and the original
+        // is tried once — which may be a fresh login Claude Code made since.
+        Err(UsageError::Unauthorized { .. }) if source == Source::Copy => {
+            if let Some(dir) = &fetcher.credential_cache {
+                let _ = std::fs::remove_file(cache_file(dir, &target.dir));
+            }
+            let (credentials, _) = load_credentials(fetcher, target)?;
+            ask(fetcher, target, &credentials)
+        }
         other => other,
-    };
-
-    let stored = fetcher
-        .claude_credentials
-        .read(&target.dir, &fetcher.home, fetcher.keychain_prompt)
-        .map_err(with_command)?;
-    let Some(stored) = stored else {
-        return Err(UsageError::NotSignedIn);
-    };
-    let Some(credentials) = parse_stored(&stored)? else {
-        return Err(UsageError::NotSignedIn);
-    };
-    if credentials.is_expired(now_epoch() * 1000) {
-        return Err(UsageError::TokenExpired {
-            command: target.command.clone(),
-        });
     }
+}
 
+/// One usage request with a given login.
+fn ask(fetcher: &Fetcher, target: &Target, credentials: &StoredCredentials) -> Result<UsageSnapshot, UsageError> {
     let user_agent = format!("claude-code/{}", claude_code_version());
     let bearer = format!("Bearer {}", credentials.access_token);
     let response = fetcher.http.get(
@@ -448,6 +623,8 @@ mod tests {
         let json = r#"{"claudeAiOauth":{"accessToken":"tok","refreshToken":"r","expiresAt":1800000000000,"scopes":["user:inference","user:profile"],"subscriptionType":"max","rateLimitTier":"default_claude_max_5x"}}"#;
         let creds = parse_stored(json).unwrap().unwrap();
         assert_eq!(creds.access_token, "tok");
+        assert_eq!(creds.refresh_token.as_deref(), Some("r"));
+        assert_eq!(parse_stored(&creds.to_json()).unwrap().unwrap(), creds, "a copy reads back identically");
         assert_eq!(creds.expires_at_ms, Some(1_800_000_000_000));
         assert_eq!(creds.scopes, vec!["user:inference", "user:profile"]);
         assert!(!creds.is_expired(1_700_000_000_000));
@@ -537,5 +714,241 @@ mod tests {
         )
         .unwrap();
         assert_eq!(plan_from_claude_json(d.path(), d.path()).as_deref(), Some("Max 5x"));
+    }
+}
+
+#[cfg(test)]
+mod copy_tests {
+    use super::*;
+    use crate::usage::http::FakeHttp;
+    use crate::usage::{ClaudeCredentialReader, Fetcher, Target};
+    use std::cell::Cell;
+
+    /// A reader that hands out one login and counts how often it is asked.
+    struct Original {
+        json: String,
+        reads: Cell<usize>,
+    }
+
+    impl ClaudeCredentialReader for Original {
+        fn read(&self, _dir: &Path, _home: &Path, _prompt: bool) -> Result<Option<String>, UsageError> {
+            self.reads.set(self.reads.get() + 1);
+            Ok(Some(self.json.clone()))
+        }
+    }
+
+    const USAGE: &str = r#"{"five_hour":{"utilization":10,"resets_at":"2026-09-16T12:00:00Z"}}"#;
+
+    fn login(expires_at_ms: i64) -> String {
+        StoredCredentials {
+            access_token: "orig".into(),
+            refresh_token: Some("refresh-1".into()),
+            expires_at_ms: Some(expires_at_ms),
+            scopes: vec!["user:profile".into()],
+            subscription_type: Some("max".into()),
+            rate_limit_tier: None,
+        }
+        .to_json()
+    }
+
+    fn far() -> i64 {
+        now_epoch() * 1000 + 24 * 3600 * 1000
+    }
+
+    fn target(dir: &tempfile::TempDir) -> Target {
+        Target {
+            profile: Some("work".into()),
+            provider: Provider::Claude,
+            dir: dir.path().join("work"),
+            command: "claude-work".into(),
+        }
+    }
+
+    fn bearer(http: &FakeHttp, nth: usize) -> String {
+        http.requests.borrow()[nth].1.iter().find(|(k, _)| k == "Authorization").unwrap().1.clone()
+    }
+
+    #[test]
+    fn the_original_is_read_once_and_the_copy_serves_after_that() {
+        let d = tempfile::TempDir::new().unwrap();
+        let http = FakeHttp::new();
+        http.respond("/api/oauth/usage", 200, USAGE);
+        let original = Original { json: login(far()), reads: Cell::new(0) };
+        let cache = d.path().join("cache");
+        let fetcher = Fetcher {
+            http: &http,
+            claude_credentials: &original,
+            codex_binary: None,
+            home: d.path().to_path_buf(),
+            keychain_prompt: false,
+            credential_cache: Some(cache.clone()),
+        };
+        let target = target(&d);
+
+        fetcher.fetch(&target).unwrap();
+        fetcher.fetch(&target).unwrap();
+        assert_eq!(original.reads.get(), 1, "the second fetch must not touch the Keychain");
+
+        let file = cache_file(&cache, &target.dir);
+        assert!(file.is_file());
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(std::fs::metadata(&file).unwrap().permissions().mode() & 0o777, 0o600);
+        assert_eq!(std::fs::metadata(&cache).unwrap().permissions().mode() & 0o777, 0o700);
+    }
+
+    #[test]
+    fn without_a_cache_directory_nothing_is_copied() {
+        let d = tempfile::TempDir::new().unwrap();
+        let http = FakeHttp::new();
+        http.respond("/api/oauth/usage", 200, USAGE);
+        let original = Original { json: login(far()), reads: Cell::new(0) };
+        let fetcher = Fetcher {
+            http: &http,
+            claude_credentials: &original,
+            codex_binary: None,
+            home: d.path().to_path_buf(),
+            keychain_prompt: false,
+            credential_cache: None,
+        };
+        let target = target(&d);
+        fetcher.fetch(&target).unwrap();
+        fetcher.fetch(&target).unwrap();
+        assert_eq!(original.reads.get(), 2);
+        assert!(!d.path().join("cache").exists());
+    }
+
+    #[test]
+    fn an_expiring_copy_is_renewed_with_its_refresh_token_not_the_keychain() {
+        let d = tempfile::TempDir::new().unwrap();
+        let http = FakeHttp::new();
+        http.respond("/api/oauth/usage", 200, USAGE);
+        http.respond("/v1/oauth/token", 200, r#"{"access_token":"renewed","refresh_token":"refresh-2","expires_in":28800}"#);
+        let cache = d.path().join("cache");
+        let target = target(&d);
+        // A copy that expires in a minute: inside the renewal margin.
+        write_cache(
+            &cache_file(&cache, &target.dir),
+            &parse_stored(&login(now_epoch() * 1000 + 60_000)).unwrap().unwrap(),
+        )
+        .unwrap();
+        let original = Original { json: login(far()), reads: Cell::new(0) };
+        let fetcher = Fetcher {
+            http: &http,
+            claude_credentials: &original,
+            codex_binary: None,
+            home: d.path().to_path_buf(),
+            keychain_prompt: false,
+            credential_cache: Some(cache.clone()),
+        };
+
+        fetcher.fetch(&target).unwrap();
+        assert_eq!(original.reads.get(), 0);
+        assert_eq!(http.calls("/v1/oauth/token"), 1);
+        let form = http.headers_sent("/v1/oauth/token");
+        assert!(form.contains(&("form:grant_type".to_string(), "refresh_token".to_string())), "{form:?}");
+        assert!(form.contains(&("form:refresh_token".to_string(), "refresh-1".to_string())), "{form:?}");
+        assert!(form.contains(&("form:client_id".to_string(), CLIENT_ID.to_string())), "{form:?}");
+        assert_eq!(bearer(&http, 1), "Bearer renewed");
+
+        let saved = parse_stored(&std::fs::read_to_string(cache_file(&cache, &target.dir)).unwrap()).unwrap().unwrap();
+        assert_eq!(saved.access_token, "renewed");
+        assert_eq!(saved.refresh_token.as_deref(), Some("refresh-2"));
+        assert!(saved.expires_at_ms.unwrap() > now_epoch() * 1000 + 7 * 3600 * 1000);
+        assert_eq!(saved.subscription_type.as_deref(), Some("max"), "what the copy knew about the plan is kept");
+    }
+
+    #[test]
+    fn a_rejected_refresh_drops_the_copy_and_goes_back_to_the_original() {
+        let d = tempfile::TempDir::new().unwrap();
+        let http = FakeHttp::new();
+        http.respond("/api/oauth/usage", 200, USAGE);
+        http.respond("/v1/oauth/token", 400, r#"{"error":"invalid_grant"}"#);
+        let cache = d.path().join("cache");
+        let target = target(&d);
+        write_cache(&cache_file(&cache, &target.dir), &parse_stored(&login(1000)).unwrap().unwrap()).unwrap();
+        let original = Original { json: login(far()), reads: Cell::new(0) };
+        let fetcher = Fetcher {
+            http: &http,
+            claude_credentials: &original,
+            codex_binary: None,
+            home: d.path().to_path_buf(),
+            keychain_prompt: false,
+            credential_cache: Some(cache.clone()),
+        };
+
+        fetcher.fetch(&target).unwrap();
+        assert_eq!(original.reads.get(), 1);
+        assert_eq!(bearer(&http, 1), "Bearer orig");
+        // And the fresh original was copied for next time.
+        let saved = parse_stored(&std::fs::read_to_string(cache_file(&cache, &target.dir)).unwrap()).unwrap().unwrap();
+        assert_eq!(saved.access_token, "orig");
+    }
+
+    #[test]
+    fn a_transient_refresh_failure_is_reported_and_keeps_the_copy() {
+        let d = tempfile::TempDir::new().unwrap();
+        let http = FakeHttp::new();
+        http.respond("/v1/oauth/token", 503, "later");
+        let cache = d.path().join("cache");
+        let target = target(&d);
+        write_cache(&cache_file(&cache, &target.dir), &parse_stored(&login(1000)).unwrap().unwrap()).unwrap();
+        let original = Original { json: login(far()), reads: Cell::new(0) };
+        let fetcher = Fetcher {
+            http: &http,
+            claude_credentials: &original,
+            codex_binary: None,
+            home: d.path().to_path_buf(),
+            keychain_prompt: false,
+            credential_cache: Some(cache.clone()),
+        };
+        assert!(matches!(fetcher.fetch(&target), Err(UsageError::Http { status: 503, .. })));
+        assert_eq!(original.reads.get(), 0);
+        assert!(cache_file(&cache, &target.dir).is_file());
+    }
+
+    #[test]
+    fn a_copy_the_provider_rejects_is_dropped_and_the_original_tried_once() {
+        let d = tempfile::TempDir::new().unwrap();
+        let http = FakeHttp::new();
+        // The first usage call answers 401, the retry 200: order matters,
+        // so respond by the bearer the fake cannot see — use two fetchers.
+        http.respond("/api/oauth/usage", 401, "no");
+        let cache = d.path().join("cache");
+        let target = target(&d);
+        let stale = StoredCredentials {
+            access_token: "stale".into(),
+            refresh_token: None,
+            expires_at_ms: Some(far()),
+            scopes: vec![],
+            subscription_type: None,
+            rate_limit_tier: None,
+        };
+        write_cache(&cache_file(&cache, &target.dir), &stale).unwrap();
+        let original = Original { json: login(far()), reads: Cell::new(0) };
+        let fetcher = Fetcher {
+            http: &http,
+            claude_credentials: &original,
+            codex_binary: None,
+            home: d.path().to_path_buf(),
+            keychain_prompt: false,
+            credential_cache: Some(cache.clone()),
+        };
+        let result = fetcher.fetch(&target);
+        assert!(matches!(result, Err(UsageError::Unauthorized { .. })), "{result:?}");
+        assert_eq!(original.reads.get(), 1, "the original is consulted once after the copy fails");
+        assert_eq!(bearer(&http, 0), "Bearer stale");
+        assert_eq!(bearer(&http, 1), "Bearer orig");
+    }
+
+    #[test]
+    fn forgetting_removes_every_copy() {
+        let d = tempfile::TempDir::new().unwrap();
+        let cache = crate::usage::credential_cache_dir(d.path());
+        for name in ["a", "b"] {
+            write_cache(&cache_file(&cache, Path::new(name)), &parse_stored(&login(far())).unwrap().unwrap()).unwrap();
+        }
+        assert_eq!(crate::usage::forget_credentials(d.path()).unwrap(), 2);
+        assert_eq!(crate::usage::forget_credentials(d.path()).unwrap(), 0);
+        assert_eq!(crate::usage::forget_credentials(&d.path().join("nowhere")).unwrap(), 0);
     }
 }

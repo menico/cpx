@@ -238,9 +238,15 @@ public extension CpxCLI {
 
     /// `prompt` false forbids a Keychain dialog: logins cpx may not read
     /// yet come back as `keychainNeedsPermission` instead.
-    func usage(accounts: [String] = [], prompt: Bool) async throws -> UsageReport {
-        try await json(UsageReport.self, ["usage"] + (prompt ? [] : ["--no-prompt"]) + accounts)
+    func usage(accounts: [String] = [], prompt: Bool, keepLogins: Bool) async throws -> UsageReport {
+        var args = ["usage"]
+        if !prompt { args.append("--no-prompt") }
+        if keepLogins { args.append("--keep-logins") }
+        return try await json(UsageReport.self, args + accounts)
     }
+
+    /// Delete the copies `--keep-logins` made.
+    func forgetLogins() async throws { try await call(["usage", "--forget-logins"]) }
 
     func cost(accounts: [String] = [], days: Int = 30) async throws -> CostReportList {
         try await json(CostReportList.self, ["cost", "--days", String(days)] + accounts)

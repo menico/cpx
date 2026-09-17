@@ -196,7 +196,7 @@ final class AppState {
         }
 
         let prompt = mayPrompt(manual: manual)
-        async let usageReport = try? cli.usage(accounts: only, prompt: prompt)
+        async let usageReport = try? cli.usage(accounts: only, prompt: prompt, keepLogins: settings.keepLogins)
         async let costReport = settings.showCost ? (try? cli.cost(accounts: only, days: settings.costDays)) : nil
         async let statuses: [Provider: ProviderStatus] = settings.statusChecks ? fetchStatuses() : [:]
 

@@ -116,11 +116,22 @@ struct SettingsView: View {
                     .disabled(!settings.notificationsEnabled)
             }
 
-            Section("Keychain") {
+            Section("Claude logins") {
+                Toggle("Keep a private copy of each Claude login", isOn: $settings.keepLogins)
+                    .onChange(of: settings.keepLogins) { _, on in
+                        if on {
+                            // Copy each login now, so the questions come once, together.
+                            Task { await state.refreshUsage(manual: true) }
+                        } else {
+                            Task { try? await state.cli.forgetLogins() }
+                        }
+                    }
+                Text("With a copy, the Keychain is read once per profile and cpx renews the copy itself, the way Claude Code renews its own; macOS is not asked again. The copy lives under ~/.claude-profiles/cache, readable only by you — the same footing as Codex's own login file. Turning this off deletes the copies.")
+                    .font(.caption).foregroundStyle(.secondary)
                 Picker("Ask to read a Claude login", selection: $settings.keychainPrompts) {
                     ForEach(KeychainPromptPolicy.allCases, id: \.self) { Text($0.label).tag($0) }
                 }
-                Text("cpx reads a login only to ask its provider for usage, and never writes it anywhere. macOS asks once per Claude profile; choose Always Allow and it stays quiet until Claude Code next rewrites its item, when it asks again. Background refreshes never ask; an account that needs permission shows an Allow button.")
+                Text("cpx reads a login only to ask its provider for usage. Background refreshes never ask; an account that needs permission shows an Allow button. With copies kept, a question comes at most once per profile.")
                     .font(.caption).foregroundStyle(.secondary)
             }
 

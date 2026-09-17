@@ -335,12 +335,19 @@ instead. Codex needs no permission at all: its login is a file.
 Two things make the question come back. Claude Code rewrites its Keychain
 item when it refreshes the token, which drops every grant on it. And an
 ad-hoc signed build is known to macOS only by its hash, so each new build is
-a stranger; set `CPX_SIGN_IDENTITY` to a certificate of yours when running
-`make app` or a release and the app keeps one identity across builds. In the app,
-background refreshes never ask — an account cpx may not read shows an *Allow*
-button instead — and Settings can turn the question off entirely, in which
-case Claude accounts show spend but no usage bars. `cpx usage --no-prompt`
-and `CPX_NO_KEYCHAIN=1` do the same for the command.
+a stranger. The way out is `cpx usage --keep-logins`, or the matching switch
+in the app's Settings: cpx keeps an owner-only copy of each Claude login
+under `~/.claude-profiles/cache/` and renews the copy itself, the way Claude
+Code renews its own, so the Keychain is read once per profile and then left
+alone. The copy is a file only you can read — the same footing as Codex's
+own `auth.json` — and `cpx usage --forget-logins` deletes it. Alternatively,
+set `CPX_SIGN_IDENTITY` to a certificate of yours when building, and the
+app keeps one identity across builds.
+
+In the app, background refreshes never ask — an account cpx may not read
+shows an *Allow* button instead — and Settings can turn the question off
+entirely, in which case Claude accounts show spend but no usage bars.
+`cpx usage --no-prompt` and `CPX_NO_KEYCHAIN=1` do the same for the command.
 
 ```
 work           claude   me@example.com (Max 5x)

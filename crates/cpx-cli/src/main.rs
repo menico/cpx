@@ -134,6 +134,13 @@ enum Command {
         /// Never show a Keychain dialog; report logins cpx may not read yet.
         #[arg(long)]
         no_prompt: bool,
+        /// Keep an owner-only copy of each Claude login under the cpx root,
+        /// renewed by cpx, so the Keychain is read once per profile.
+        #[arg(long)]
+        keep_logins: bool,
+        /// Delete the copies kept by --keep-logins, and do nothing else.
+        #[arg(long, conflicts_with_all = ["keep_logins", "no_prompt"])]
+        forget_logins: bool,
     },
     /// Estimate what each account's local transcripts cost.
     Cost {
@@ -291,7 +298,23 @@ fn run() -> Result<()> {
             off,
             on,
         }) => cmd_skills_plugin(&profile, &key, on || !off, as_json),
-        Command::Usage { accounts, no_prompt } => cmd_usage(&accounts, !no_prompt, as_json),
+        Command::Usage {
+            accounts,
+            no_prompt,
+            keep_logins,
+            forget_logins,
+        } => {
+            if forget_logins {
+                let removed = cpx_core::usage::forget_credentials(&session::layout()?.root)?;
+                done(
+                    as_json,
+                    json!({ "forgotten": removed }),
+                    &format!("Forgot {removed} copied login(s)."),
+                )
+            } else {
+                cmd_usage(&accounts, !no_prompt, keep_logins, as_json)
+            }
+        }
         Command::Cost {
             accounts,
             days,
@@ -1491,7 +1514,7 @@ fn until(epoch: i64) -> String {
     format!("{}d {}h", hours / 24, hours % 24)
 }
 
-fn cmd_usage(names: &[String], prompt: bool, as_json: bool) -> Result<()> {
+fn cmd_usage(names: &[String], prompt: bool, keep_logins: bool, as_json: bool) -> Result<()> {
     use cpx_core::usage::{http::UreqHttp, Fetcher, SystemCredentialReader};
 
     let session = Session::load()?;
@@ -1507,6 +1530,7 @@ fn cmd_usage(names: &[String], prompt: bool, as_json: bool) -> Result<()> {
         ),
         home: session.layout.home.clone(),
         keychain_prompt: prompt,
+        credential_cache: keep_logins.then(|| cpx_core::usage::credential_cache_dir(&session.layout.root)),
     };
 
     let mut rows = Vec::new();

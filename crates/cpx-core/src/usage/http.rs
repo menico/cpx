@@ -13,6 +13,9 @@ pub struct Response {
 
 pub trait Http {
     fn get(&self, url: &str, headers: &[(&str, &str)]) -> Result<Response, UsageError>;
+
+    /// POST a form-encoded body.
+    fn post_form(&self, url: &str, headers: &[(&str, &str)], form: &[(&str, &str)]) -> Result<Response, UsageError>;
 }
 
 /// A real client. Every request has a timeout: a hung fetch in a menu bar
@@ -29,16 +32,15 @@ impl Default for UreqHttp {
     }
 }
 
-impl Http for UreqHttp {
-    fn get(&self, url: &str, headers: &[(&str, &str)]) -> Result<Response, UsageError> {
-        let agent = ureq::AgentBuilder::new()
+impl UreqHttp {
+    fn agent(&self) -> ureq::Agent {
+        ureq::AgentBuilder::new()
             .timeout(std::time::Duration::from_secs(self.timeout_seconds))
-            .build();
-        let mut request = agent.get(url);
-        for (name, value) in headers {
-            request = request.set(name, value);
-        }
-        let response = match request.call() {
+            .build()
+    }
+
+    fn finish(result: Result<ureq::Response, ureq::Error>) -> Result<Response, UsageError> {
+        let response = match result {
             Ok(response) => response,
             // A non-2xx status is still an answer worth reading.
             Err(ureq::Error::Status(_, response)) => response,
@@ -54,6 +56,24 @@ impl Http for UreqHttp {
             body,
             retry_after,
         })
+    }
+}
+
+impl Http for UreqHttp {
+    fn get(&self, url: &str, headers: &[(&str, &str)]) -> Result<Response, UsageError> {
+        let mut request = self.agent().get(url);
+        for (name, value) in headers {
+            request = request.set(name, value);
+        }
+        Self::finish(request.call())
+    }
+
+    fn post_form(&self, url: &str, headers: &[(&str, &str)], form: &[(&str, &str)]) -> Result<Response, UsageError> {
+        let mut request = self.agent().post(url);
+        for (name, value) in headers {
+            request = request.set(name, value);
+        }
+        Self::finish(request.send_form(form))
     }
 }
 
@@ -93,10 +113,13 @@ impl FakeHttp {
             .map(|(_, headers)| headers.clone())
             .unwrap_or_default()
     }
-}
 
-impl Http for FakeHttp {
-    fn get(&self, url: &str, headers: &[(&str, &str)]) -> Result<Response, UsageError> {
+    /// How many requests hit URLs containing `fragment`.
+    pub fn calls(&self, fragment: &str) -> usize {
+        self.requests.borrow().iter().filter(|(url, _)| url.contains(fragment)).count()
+    }
+
+    fn answer(&self, url: &str, headers: &[(&str, &str)]) -> Result<Response, UsageError> {
         self.requests.borrow_mut().push((
             url.to_string(),
             headers
@@ -110,6 +133,20 @@ impl Http for FakeHttp {
             .find(|(fragment, _)| url.contains(fragment.as_str()))
             .map(|(_, response)| response.clone())
             .ok_or_else(|| UsageError::Network(format!("no canned response for {url}")))
+    }
+}
+
+impl Http for FakeHttp {
+    fn get(&self, url: &str, headers: &[(&str, &str)]) -> Result<Response, UsageError> {
+        self.answer(url, headers)
+    }
+
+    fn post_form(&self, url: &str, headers: &[(&str, &str)], form: &[(&str, &str)]) -> Result<Response, UsageError> {
+        // The form is recorded like headers, prefixed `form:`, so tests can see it.
+        let owned: Vec<(String, String)> = form.iter().map(|(k, v)| (format!("form:{k}"), v.to_string())).collect();
+        let mut all: Vec<(&str, &str)> = headers.to_vec();
+        all.extend(owned.iter().map(|(k, v)| (k.as_str(), v.as_str())));
+        self.answer(url, &all)
     }
 }
 
@@ -145,5 +182,7 @@ mod tests {
         assert_eq!(response.status, 200);
         assert_eq!(http.headers_sent("/usage"), vec![("Authorization".to_string(), "Bearer t".to_string())]);
         assert!(http.get("https://x/other", &[]).is_err());
+        http.post_form("https://x/api/usage", &[], &[("grant_type", "x")]).unwrap();
+        assert_eq!(http.calls("/usage"), 2);
     }
 }

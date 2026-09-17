@@ -211,6 +211,30 @@ pub struct Fetcher<'a> {
     /// Whether a Claude Keychain read may ask the user. False for anything
     /// that runs in the background.
     pub keychain_prompt: bool,
+    /// Where to keep a private copy of each Claude login, so the Keychain
+    /// is read once per profile. `None` keeps no copies.
+    pub credential_cache: Option<PathBuf>,
+}
+
+/// Where copies of Claude logins live when the user has asked for them:
+/// under the cpx root, owner-only, one file per config directory.
+pub fn credential_cache_dir(root: &Path) -> PathBuf {
+    root.join("cache").join("claude-logins")
+}
+
+/// Remove every cached login. Returns how many there were.
+pub fn forget_credentials(root: &Path) -> std::io::Result<usize> {
+    let dir = credential_cache_dir(root);
+    let mut removed = 0;
+    if let Ok(entries) = std::fs::read_dir(&dir) {
+        for entry in entries.flatten() {
+            if entry.path().extension().is_some_and(|e| e == "json") {
+                std::fs::remove_file(entry.path())?;
+                removed += 1;
+            }
+        }
+    }
+    Ok(removed)
 }
 
 impl Fetcher<'_> {

@@ -73,6 +73,9 @@ final class Settings {
     var hiddenAccounts: Set<String> { didSet { save("hiddenAccounts", Array(hiddenAccounts)) } }
     var costDays: Int { didSet { save("costDays", costDays) } }
     var keychainPrompts: KeychainPromptPolicy { didSet { save("keychainPrompts", keychainPrompts.rawValue) } }
+    /// Keep an owner-only copy of each Claude login under the cpx root, so
+    /// the Keychain is read once per profile and renewed by cpx.
+    var keepLogins: Bool { didSet { save("keepLogins", keepLogins) } }
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
@@ -91,6 +94,7 @@ final class Settings {
         hiddenAccounts = Set(defaults.stringArray(forKey: "hiddenAccounts") ?? [])
         costDays = max(7, defaults.object(forKey: "costDays") as? Int ?? 30)
         keychainPrompts = KeychainPromptPolicy(rawValue: defaults.string(forKey: "keychainPrompts") ?? "") ?? .manualOnly
+        keepLogins = defaults.bool(forKey: "keepLogins")
     }
 
     private func save(_ key: String, _ value: Any?) {
