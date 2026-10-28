@@ -155,6 +155,29 @@ enum Command {
     },
     /// Where cpx keeps its configuration.
     Paths,
+    /// List git worktrees with the sessions that worked in them, or remove one.
+    #[command(subcommand)]
+    Worktrees(WorktreesCommand),
+}
+
+#[derive(Subcommand)]
+enum WorktreesCommand {
+    /// Every worktree of the repositories your accounts' sessions worked in.
+    List {
+        /// Also measure each worktree's size and uncommitted files (slower).
+        #[arg(long)]
+        details: bool,
+    },
+    /// Remove an added worktree. Its branch is kept.
+    Remove {
+        path: PathBuf,
+        /// The repository, needed only when the worktree's directory is gone.
+        #[arg(long)]
+        repo: Option<PathBuf>,
+        /// Remove it even with uncommitted changes, a lock, or a session running in it.
+        #[arg(long)]
+        force: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -291,6 +314,10 @@ fn run() -> Result<()> {
         }
         Command::Skills(SkillsCommand::Remove { profile, skill }) => {
             cmd_skills_remove(&profile, &skill, as_json)
+        }
+        Command::Worktrees(WorktreesCommand::List { details }) => cmd_worktrees_list(details, as_json),
+        Command::Worktrees(WorktreesCommand::Remove { path, repo, force }) => {
+            cmd_worktrees_remove(&path, repo.as_deref(), force, as_json)
         }
         Command::Skills(SkillsCommand::Plugin {
             profile,
@@ -1036,6 +1063,91 @@ fn cmd_skills_remove(profile: &str, skill: &str, as_json: bool) -> Result<()> {
             "Removed {skill} from {profile}.\nKept at {} — delete it yourself when you are sure.",
             moved.display()
         ),
+    )
+}
+
+fn cmd_worktrees_list(details: bool, as_json: bool) -> Result<()> {
+    let session = Session::load()?;
+    let targets = cpx_core::usage::Target::all(&session.config, &session.layout);
+    let cache = cpx_core::worktrees::cache_path(&session.layout.root);
+    let mut report = cpx_core::worktrees::scan(&targets, Some(&cache));
+    if details {
+        cpx_core::worktrees::fill_details(&mut report);
+    }
+    if as_json {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+        return Ok(());
+    }
+
+    if report.repos.is_empty() {
+        println!("No repository your sessions worked in has worktrees.");
+        return Ok(());
+    }
+    for repo in &report.repos {
+        println!("{}", repo.path.display());
+        for tree in repo.worktrees.iter().filter(|t| !t.main) {
+            let shown = tree.path.strip_prefix(&repo.path).unwrap_or(&tree.path);
+            let branch = tree.branch.as_deref().unwrap_or("detached");
+            let mut notes = Vec::new();
+            if tree.prunable {
+                notes.push("gone".to_string());
+            }
+            if tree.locked {
+                notes.push("locked".to_string());
+            }
+            if let Some(bytes) = tree.size_bytes {
+                notes.push(format!("{:.1} GB", bytes as f64 / 1e9));
+            }
+            match tree.changes {
+                Some(0) => notes.push("clean".into()),
+                Some(n) => notes.push(format!("{n} changed")),
+                None => {}
+            }
+            let notes = if notes.is_empty() { String::new() } else { format!("  ({})", notes.join(", ")) };
+            println!("  {} [{branch}]{notes}", shown.display());
+            if tree.sessions.is_empty() {
+                println!("      no session");
+            }
+            for s in tree.sessions.iter().take(3) {
+                let title = s.title.clone().unwrap_or_else(|| s.id.chars().take(8).collect());
+                let state = if s.live { s.status.clone().unwrap_or_else(|| "running".into()) } else { ago(s.last_active) };
+                println!("      {:<10} {title}  ({state})", s.account);
+            }
+            if tree.sessions.len() > 3 {
+                println!("      and {} more", tree.sessions.len() - 3);
+            }
+        }
+    }
+    Ok(())
+}
+
+/// How long ago an epoch second was, for people.
+fn ago(epoch: i64) -> String {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    let hours = (now - epoch).max(0) / 3600;
+    match hours {
+        0 => "within the hour".into(),
+        1..=47 => format!("{hours}h ago"),
+        _ => format!("{}d ago", hours / 24),
+    }
+}
+
+fn cmd_worktrees_remove(path: &Path, repo: Option<&Path>, force: bool, as_json: bool) -> Result<()> {
+    let session = Session::load()?;
+    let targets = cpx_core::usage::Target::all(&session.config, &session.layout);
+    let removed = cpx_core::worktrees::remove(path, repo, &targets, force)?;
+    let kept = removed
+        .branch
+        .as_ref()
+        .map(|b| format!("\nThe branch {b} is kept."))
+        .unwrap_or_default();
+    done(
+        as_json,
+        json!(removed),
+        &format!("Removed {}.{kept}", removed.path.display()),
     )
 }
 

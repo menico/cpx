@@ -424,3 +424,55 @@ public indirect enum AnyJSON: Codable, Hashable, Sendable {
         }
     }
 }
+
+// MARK: - Worktrees
+
+public struct WorktreeSession: Codable, Hashable, Identifiable, Sendable {
+    /// The profile name, or `@claude` / `@codex` for a default session.
+    public var account: String
+    public var profile: String?
+    public var provider: Provider
+    public var id: String
+    public var title: String?
+    public var live: Bool
+    public var status: String?
+    public var lastActive: Int64
+    public var resumeDir: String?
+    public var resume: String
+
+    public var lastActiveDate: Date { Date(timeIntervalSince1970: TimeInterval(lastActive)) }
+}
+
+public struct Worktree: Codable, Hashable, Identifiable, Sendable {
+    public var path: String
+    public var branch: String?
+    public var head: String?
+    public var main: Bool
+    public var locked: Bool
+    public var prunable: Bool
+    public var sessions: [WorktreeSession]
+    public var lastActive: Int64?
+    public var sizeBytes: UInt64?
+    public var changes: Int?
+
+    public var id: String { path }
+    public var name: String { (path as NSString).lastPathComponent }
+    public var inUse: Bool { sessions.contains { $0.live } }
+}
+
+public struct WorktreeRepo: Codable, Hashable, Identifiable, Sendable {
+    public var path: String
+    public var name: String
+    public var worktrees: [Worktree]
+    public var id: String { path }
+}
+
+public struct WorktreeReport: Codable, Sendable {
+    public var repos: [WorktreeRepo]
+}
+
+public struct RemovedWorktree: Codable, Sendable {
+    public var path: String
+    public var repo: String
+    public var branch: String?
+}

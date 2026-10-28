@@ -16,6 +16,7 @@ hex.workspace = true
 base64.workspace = true
 ureq = { version = "2", default-features = false, features = ["tls"] }
 chrono = "0.4"
+libc = "0.2"
 
 [dev-dependencies]
 base64.workspace = true

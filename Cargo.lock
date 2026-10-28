@@ -202,7 +202,7 @@ dependencies = [
 
 [[package]]
 name = "cpx-cli"
-version = "0.2.2"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -213,12 +213,13 @@ dependencies = [
 
 [[package]]
 name = "cpx-core"
-version = "0.2.2"
+version = "0.3.0"
 dependencies = [
  "base64",
  "chrono",
  "core-foundation",
  "hex",
+ "libc",
  "security-framework",
  "security-framework-sys",
  "serde",

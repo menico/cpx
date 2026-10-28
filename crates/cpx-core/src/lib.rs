@@ -20,3 +20,4 @@ pub mod error;
 pub mod merge;
 pub mod usage;
 pub mod cost;
+pub mod worktrees;

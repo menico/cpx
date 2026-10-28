@@ -51,6 +51,11 @@ final class AppState {
     var cost: [String: CostAccount] = [:]
     var providerStatus: [Provider: ProviderStatus] = [:]
 
+    /// Read when the Worktrees tab opens, not on the refresh loop: it reads
+    /// every transcript and walks every checkout.
+    var worktrees: WorktreeReport?
+    var measuringWorktrees = false
+
     var configError: String?
     var busy = false
     var refreshing = false
@@ -167,6 +172,54 @@ final class AppState {
         }
         await reloadConfig()
         return true
+    }
+
+    // MARK: - Worktrees
+
+    /// The list first, which is quick once the transcripts are indexed, then
+    /// again with sizes and uncommitted files.
+    func loadWorktrees() async {
+        do {
+            let listed = try await cli.worktrees(details: false)
+            // Keep the measurements already taken until fresh ones arrive.
+            worktrees = merged(listed, measured: worktrees)
+        } catch {
+            configError = error.localizedDescription
+            return
+        }
+        guard !measuringWorktrees else { return }
+        measuringWorktrees = true
+        defer { measuringWorktrees = false }
+        if let measured = try? await cli.worktrees(details: true) {
+            worktrees = measured
+        }
+    }
+
+    private func merged(_ listed: WorktreeReport, measured: WorktreeReport?) -> WorktreeReport {
+        guard let measured else { return listed }
+        let known = Dictionary(measured.repos.flatMap(\.worktrees).map { ($0.path, $0) }, uniquingKeysWith: { a, _ in a })
+        var result = listed
+        for r in result.repos.indices {
+            for t in result.repos[r].worktrees.indices {
+                if let old = known[result.repos[r].worktrees[t].path] {
+                    result.repos[r].worktrees[t].sizeBytes = old.sizeBytes
+                    result.repos[r].worktrees[t].changes = old.changes
+                }
+            }
+        }
+        return result
+    }
+
+    /// Remove a worktree and drop it from the list. The command's refusal
+    /// comes back as the error, for the view to offer forcing.
+    func removeWorktree(_ tree: Worktree, repo: WorktreeRepo, force: Bool) async throws {
+        _ = try await cli.removeWorktree(path: tree.path, repo: repo.path, force: force)
+        guard var report = worktrees else { return }
+        for r in report.repos.indices {
+            report.repos[r].worktrees.removeAll { $0.path == tree.path }
+        }
+        report.repos.removeAll { $0.worktrees.count < 2 }
+        worktrees = report
     }
 
     func initialise() async {

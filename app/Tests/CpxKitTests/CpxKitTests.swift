@@ -23,6 +23,26 @@ final class ModelDecodingTests: XCTestCase {
         XCTAssertTrue(report.accounts[1].error!.isLoginProblem)
     }
 
+    func testWorktreeReportDecodesWhatTheCommandPrints() throws {
+        let json = """
+        {"repos":[{"path":"/r","name":"r","worktrees":[
+          {"path":"/r","branch":"main","head":"abc","main":true,"locked":false,"prunable":false,"sessions":[],
+           "lastActive":null,"sizeBytes":null,"changes":null},
+          {"path":"/r/.claude/worktrees/feat","branch":null,"head":"def","main":false,"locked":true,"prunable":false,
+           "sessions":[{"account":"work","profile":"work","provider":"claude","id":"s1","title":"Build it","live":true,
+             "status":"idle","lastActive":1789550000,"resumeDir":"/r","resume":"claude-work --resume s1"}],
+           "lastActive":1789550000,"sizeBytes":2048,"changes":0}]}]}
+        """
+        let report = try JSONDecoder().decode(WorktreeReport.self, from: Data(json.utf8))
+        let tree = report.repos[0].worktrees[1]
+        XCTAssertEqual(tree.name, "feat")
+        XCTAssertNil(tree.branch)
+        XCTAssertTrue(tree.inUse)
+        XCTAssertEqual(tree.sizeBytes, 2048)
+        XCTAssertEqual(tree.sessions[0].resume, "claude-work --resume s1")
+        XCTAssertFalse(report.repos[0].worktrees[0].inUse)
+    }
+
     func testProfileListDecodes() throws {
         let json = """
         {"profiles":[{"name":"work","provider":"codex","description":"","color":"#5c8dff","adopted":false,"directory":"/d",

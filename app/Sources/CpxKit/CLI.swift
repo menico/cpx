@@ -251,4 +251,14 @@ public extension CpxCLI {
     func cost(accounts: [String] = [], days: Int = 30) async throws -> CostReportList {
         try await json(CostReportList.self, ["cost", "--days", String(days)] + accounts)
     }
+
+    /// `details` also measures size and uncommitted files, which walks every
+    /// checkout and takes a while.
+    func worktrees(details: Bool) async throws -> WorktreeReport {
+        try await json(WorktreeReport.self, ["worktrees", "list"] + (details ? ["--details"] : []))
+    }
+
+    func removeWorktree(path: String, repo: String, force: Bool) async throws -> RemovedWorktree {
+        try await json(RemovedWorktree.self, ["worktrees", "remove", path, "--repo", repo] + (force ? ["--force"] : []))
+    }
 }

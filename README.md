@@ -231,6 +231,30 @@ There is nothing to open when the statusline is a command with no file behind
 it, such as `npx something` or a binary on `PATH`; the app says so rather than
 guessing.
 
+## Worktrees
+
+Agents leave worktrees behind, each a full checkout, and nothing says which
+session made one or whether it is still needed.
+
+```bash
+cpx worktrees list             # every worktree, with the sessions that worked in it
+cpx worktrees list --details   # also size and uncommitted files (walks each checkout)
+cpx worktrees remove <path>    # the branch is kept
+cpx worktrees remove <path> --force
+```
+
+The list covers every repository any account's session worked in, read from
+the `cwd` each transcript line records and from Claude's record of the
+sessions running now. A worktree made inside a session's scratchpad is linked
+to that session by the id in its path. Transcripts are indexed once, under
+`cache/` in the cpx root, and afterwards only what was appended is read.
+
+`remove` never touches the main working tree, and without `--force` refuses a
+worktree with uncommitted files, a lock, or a session still running in it. A
+worktree whose directory is already gone is pruned instead. The app's
+Worktrees tab shows the same list with search, and offers the same removal,
+asking before it forces.
+
 ## Skills
 
 Skills reach a profile two ways, and the two have different switches.

@@ -20,6 +20,7 @@ final class Navigation {
     enum Tab: String, CaseIterable {
         case accounts
         case directories
+        case worktrees
         case health
     }
 }

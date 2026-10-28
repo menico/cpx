@@ -61,6 +61,7 @@ struct MainView: View {
             Picker("", selection: $navigation.tab) {
                 Text("Accounts \(state.visibleAccounts.count)").tag(Navigation.Tab.accounts)
                 Text("Directories \(state.bindings.count)").tag(Navigation.Tab.directories)
+                Text("Worktrees").tag(Navigation.Tab.worktrees)
                 healthLabel.tag(Navigation.Tab.health)
             }
             .pickerStyle(.segmented)
@@ -78,6 +79,8 @@ struct MainView: View {
                         AccountsView(state: state, navigation: navigation, prompt: $prompt)
                     case .directories:
                         DirectoriesView(state: state, prompt: $prompt)
+                    case .worktrees:
+                        WorktreesView(state: state)
                     case .health:
                         HealthView(checks: state.checks)
                     }
