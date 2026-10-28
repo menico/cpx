@@ -637,7 +637,14 @@ fn size_of(path: &Path) -> Option<u64> {
 }
 
 fn changes_in(path: &Path) -> Option<usize> {
-    let output = Command::new("git").arg("-C").arg(path).args(["status", "--porcelain"]).output().ok()?;
+    // A repository's own config can name an fsmonitor program that `status`
+    // would run; measuring must never execute anything a repo asks for.
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(path)
+        .args(["-c", "core.fsmonitor=false", "--no-optional-locks", "status", "--porcelain"])
+        .output()
+        .ok()?;
     output
         .status
         .success()
