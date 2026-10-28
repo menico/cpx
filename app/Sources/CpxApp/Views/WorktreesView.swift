@@ -30,6 +30,12 @@ struct WorktreesView: View {
                     .controlSize(.small)
                     .help("Hide worktrees a running session is in")
             }
+            if let error = state.worktreesError {
+                HStack(alignment: .top, spacing: 6) {
+                    StatusDot(tone: .warn).padding(.top, 4)
+                    Text(error).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
+                }
+            }
             if let report = state.worktrees {
                 summary(report)
                 let repos = filtered(report)
@@ -71,14 +77,23 @@ struct WorktreesView: View {
                 Text("· \(bytes(freeBytes)) in \(free.count) unused and clean")
             }
             Spacer()
+            if let readAt = state.worktreesReadAt {
+                TimelineView(.periodic(from: .now, by: 30)) { context in
+                    Text(state.readingWorktrees ? "reading…" : "read \(Format.age(of: readAt, now: context.date))")
+                }
+            }
             Button {
                 Task { await state.loadWorktrees() }
             } label: {
-                Image(systemName: "arrow.clockwise")
+                if state.readingWorktrees {
+                    ProgressView().controlSize(.mini)
+                } else {
+                    Image(systemName: "arrow.clockwise")
+                }
             }
             .buttonStyle(.borderless)
-            .disabled(state.measuringWorktrees)
-            .help("Read again")
+            .disabled(state.readingWorktrees)
+            .help(state.measuringWorktrees ? "Read the list again; sizes are still being measured" : "Read again")
         }
         .font(.caption)
         .foregroundStyle(.secondary)

@@ -54,6 +54,9 @@ final class AppState {
     /// Read when the Worktrees tab opens, not on the refresh loop: it reads
     /// every transcript and walks every checkout.
     var worktrees: WorktreeReport?
+    var worktreesReadAt: Date?
+    var worktreesError: String?
+    var readingWorktrees = false
     var measuringWorktrees = false
 
     var configError: String?
@@ -177,21 +180,35 @@ final class AppState {
     // MARK: - Worktrees
 
     /// The list first, which is quick once the transcripts are indexed, then
-    /// again with sizes and uncommitted files.
+    /// again with sizes and uncommitted files. Reading again while sizes are
+    /// still being measured only refreshes the list; the measuring carries on.
     func loadWorktrees() async {
+        guard !readingWorktrees else { return }
+        readingWorktrees = true
         do {
             let listed = try await cli.worktrees(details: false)
             // Keep the measurements already taken until fresh ones arrive.
             worktrees = merged(listed, measured: worktrees)
+            worktreesReadAt = Date()
+            worktreesError = nil
         } catch {
-            configError = error.localizedDescription
-            return
+            worktreesError = error.localizedDescription
         }
-        guard !measuringWorktrees else { return }
+        readingWorktrees = false
+        guard worktreesError == nil, !measuringWorktrees else { return }
         measuringWorktrees = true
         defer { measuringWorktrees = false }
-        if let measured = try? await cli.worktrees(details: true) {
-            worktrees = measured
+        do {
+            let measured = try await cli.worktrees(details: true)
+            // The list read meanwhile wins: a worktree removed while measuring
+            // must not come back.
+            if let current = worktrees {
+                worktrees = merged(current, measured: measured)
+            } else {
+                worktrees = measured
+            }
+        } catch {
+            worktreesError = "Could not measure sizes: \(error.localizedDescription)"
         }
     }
 
